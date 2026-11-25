@@ -7,7 +7,7 @@ heosterra の部位のフォルダ（`〇〇-parts`。例: `docs/art/canon/chara
 - 部位ごとに、ほかの部位に隠れた所も含めた形の縁が **ガイド** として出ます（隠れた所は点線）。`map.png` もレイヤーとして見られます。
 - 書き戻すと、画素の変わった部位の PNG だけが書き換わります。直していないファイルはバイト列まで変わりません。
 
-中身は 1 枚の LibreSprite のスクリプト [`parts-editor.js`](parts-editor.js) と、fs の口の無い版のための補助の CLI [`cli/parts-ase.mjs`](cli/parts-ase.mjs) です。どちらも依存はありません（CLI は Node 20 以上）。
+中身は 1 枚の LibreSprite のスクリプト [`parts-editor.js`](parts-editor.js) と、fs の口の無い版のための補助の CLI [`cli/parts-ase.mjs`](cli/parts-ase.mjs) です。どちらも依存はありません（CLI は Node 22 以上）。
 
 ## どの LibreSprite で使うか
 
@@ -34,7 +34,7 @@ fs の口のある版は、いまは配布されていません。LibreSprite �
 
 2. LibreSprite を開き直すと、メニューの **Scripts** に `parts-editor` が出ます。
 3. fs の口のある版では、初めて走らせたときに権限の確認が出ます。**fs.read と fs.write を許してください**（部位のフォルダを読み、PNG を書き戻すのに使います）。1.3 では確認は出ません。
-4. 1.3 で使うときは、CLI も使える場所に置きます（このリポジトリを clone するか、`cli/` と `lib/` と `parts-editor.js` を同じ形で置く）。Node 20 以上が要ります。
+4. 1.3 で使うときは、CLI も使える場所に置きます（このリポジトリを clone するか、`cli/` と `lib/` と `parts-editor.js` を同じ形で置く）。Node 22 以上が要ります。
 
 ## 使い方（fs の口のある版）
 
