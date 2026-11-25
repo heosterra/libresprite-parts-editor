@@ -81,12 +81,22 @@ export function makeJson() {
   };
 }
 
-/** 一時のフォルダに 〇〇-parts を作り、そのパスを返す（立ち絵は隣に <名前>.png） */
-export function makeFixtureDir(name = 'fx') {
+/** 隠れた所の下書きが立ち絵の外へはみ出す画素（heosterra の se のような形）。胴の右の外 */
+export const PROTRUDE = [
+  [22, 18],
+  [23, 18],
+];
+
+/**
+ * 一時のフォルダに 〇〇-parts を作り、そのパスを返す（立ち絵は隣に <名前>.png）。
+ * options.protrude: 胴の隠れた所に、立ち絵の外へはみ出す画素（PROTRUDE）を足す
+ */
+export function makeFixtureDir(name = 'fx', options = {}) {
   const root = mkdtempSync(join(tmpdir(), 'parts-editor-test-'));
   const dir = join(root, `${name}-parts`);
   mkdirSync(dir);
   const imgs = makeImages();
+  if (options.protrude) for (const [x, y] of PROTRUDE) imgs.hidden.torso.data.set([90, 120, 200, 255], (y * GRID + x) * 4);
   for (const n of ORDER) {
     writeFileSync(join(dir, `${n}.png`), encodePng(imgs.own[n]));
     writeFileSync(join(dir, `${n}.hidden.png`), encodePng(imgs.hidden[n]));

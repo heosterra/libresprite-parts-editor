@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { decodePng as refDecode } from '../../lib/png.mjs';
+import { describeWrite, openFolder } from '../../cli/parts-ase.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '../..');
@@ -82,21 +83,42 @@ function samePng(a, b) {
   return core.samePixels(a, b);
 }
 
-/** 立ち絵（ガイドを隠した合成）が元の立ち絵と同じか */
-function checkFlat(flat, label) {
+/**
+ * 直さずに書き戻したときの見込みを Node の core で計算する:
+ * エディタの見た目（ガイドを除く合成）、書くファイル、分け直したあとの見えている所
+ */
+async function expectNoEdit(dir) {
+  const opened = await openFolder(dir);
+  const { width: w, height: h, order } = opened.info;
+  const parts = {};
+  const flat = core.blank(w, h);
+  for (const l of opened.layers) {
+    if (l.kind === 'part') parts[l.name] = l.image;
+    if (!l.visible || l.kind === 'guide') continue;
+    for (let i = 0; i < w * h; i++) if (l.image.data[i * 4 + 3]) flat.data.set(l.image.data.subarray(i * 4, i * 4 + 4), i * 4);
+  }
+  const plan = core.planSave(opened.info, opened.current, { parts });
+  return { flat, files: plan.writes.map((x) => x.file).sort(), plan, own: core.splitParts(order, parts, w, h).own };
+}
+
+/** ガイドを隠した合成が、部位を重ねた見込みの絵と同じか。立ち絵との違いも数で出す */
+function checkFlat(flat, want, label) {
+  check(samePng(flat, want.flat), `${label}: 読み込んだ直後の合成（ガイドを除く）が、部位（見えている所 + 隠れた所）を order の順に重ねた絵と同じ`, `違う画素 ${core.countDiff(flat, want.flat)}`);
   if (!existsSync(spritePath)) {
-    console.log(`（立ち絵 ${spritePath} が無いので、合成の確かめは飛ばします）`);
+    console.log(`（立ち絵 ${spritePath} が無いので、立ち絵との比べは飛ばします）`);
     return;
   }
-  const want = refDecode(readFileSync(spritePath));
-  check(samePng(flat, want), `${label}: 読み込んだ直後の合成（ガイドを除く）が立ち絵と同じ`, `違う画素 ${core.countDiff(flat, want)}`);
+  const stand = refDecode(readFileSync(spritePath));
+  const d = core.countDiff(flat, stand);
+  // はみ出しの無い方向（直さずに書き戻して何も変わらない方向）では、立ち絵と同じはず
+  if (!want.files.length) check(d === 0, `${label}: 立ち絵とも同じ`, `違う画素 ${d}`);
+  else console.log(`     ${label}: 立ち絵と違う画素 ${d}（隠れた所の下書きが立ち絵の外へはみ出しているため）`);
 }
 
 function expectedLayers(order) {
-  const list = [];
-  for (const n of order) list.push([`${n}.hidden`, false, true], [n, true, true]);
-  list.push(['map', false, false]);
+  const list = [['map', false, false]];
   for (const n of order) list.push([`guide:${n}`, true, false]);
+  for (const n of order) list.push([n, true, true]);
   return list;
 }
 
@@ -107,10 +129,17 @@ function snapshot(dir) {
   return m;
 }
 
-function pickEditPixel(dir, layer) {
-  const img = refDecode(readFileSync(join(dir, `${layer}.png`)));
+/** 直す画素: 直さずに書き戻したあと（分け直したあと）も、その部位の見えている所である画素 */
+function pickEditPixel(want, layer) {
+  const img = want.own[layer];
+  if (!img) throw new Error(`部位 ${layer} がありません`);
   for (let i = 0; i < img.width * img.height; i++) if (img.data[i * 4 + 3]) return [i % img.width, Math.floor(i / img.width), img];
-  throw new Error(`${layer}.png に画素がありません`);
+  throw new Error(`${layer} の見えている所に画素がありません`);
+}
+
+/** 書く予定の内訳（はみ出しのある方向で、どのファイルのどれだけの画素が動くか） */
+function describePlan(plan) {
+  return plan.writes.map((w) => describeWrite(w)).join(' / ');
 }
 
 function expectOneEdit(beforeImg, afterBytes, x, y, label) {
@@ -126,13 +155,23 @@ async function modeAse() {
   console.log('\n== ase: CLI → LibreSprite → CLI ==');
   const dir = join(work, 'ase', basename(srcDir));
   cpSync(srcDir, dir, { recursive: true });
-  const before = snapshot(dir);
   const asePath = `${dir}.ase`;
   const cli = join(ROOT, 'cli/parts-ase.mjs');
+  const want = await expectNoEdit(dir);
   const open = spawnSync(process.execPath, [cli, 'open', dir], { encoding: 'utf8' });
   check(open.status === 0, 'CLI open', open.stdout.trim() || open.stderr.trim());
+
+  // 直さずに書き戻す（CLI が作った .ase のまま）。はみ出しの無い方向では何も書かない。
+  // はみ出しのある方向では見込みのファイルだけを書く（以降の確かめは、書き戻したあとのフォルダを元にする）
+  const s0 = spawnSync(process.execPath, [cli, 'save', asePath], { encoding: 'utf8' });
+  if (!want.files.length) check(s0.status === 0 && /変わった部位はありません/.test(s0.stdout), 'CLI save（直していない .ase）: 何も書かない', s0.stdout.trim());
+  else {
+    const wrote = [...s0.stdout.matchAll(/^書きます: (\S+?)（/gm)].map((m) => m[1]).sort();
+    check(s0.status === 0 && JSON.stringify(wrote) === JSON.stringify(want.files), `CLI save（直していない .ase）: はみ出しの分け直しで ${want.files.length} ファイルを書く`, describePlan(want.plan));
+  }
+  const before = snapshot(dir);
   const editLayer = values['edit-layer'];
-  const [ex, ey, editBefore] = pickEditPixel(dir, editLayer);
+  const [ex, ey, editBefore] = pickEditPixel(want, editLayer);
   const flatPath = join(work, 'ase', 'flat.png');
   const editedPath = join(work, 'ase', 'edited.ase');
   const script = fill(readFileSync(join(HERE, 'roundtrip-ase.js'), 'utf8'), {
@@ -149,12 +188,8 @@ async function modeAse() {
   check(r.opened === true, `LibreSprite（${r.version}）で .ase を開ける`);
   const order = core.readPartsJson(readFileSync(join(dir, 'parts.json'), 'utf8')).order;
   check(JSON.stringify(r.layers) === JSON.stringify(expectedLayers(order)), 'レイヤーの名前・並び（奥 → 手前）・表示・編集の可否', `${r.layers?.length} レイヤー`);
-  if (existsSync(flatPath)) checkFlat(refDecode(readFileSync(flatPath)), 'ase');
+  if (existsSync(flatPath)) checkFlat(refDecode(readFileSync(flatPath)), want, 'ase');
   else check(false, 'ガイドを隠した合成を PNG に書き出せる');
-
-  // 直さずに書き戻す（CLI が作った .ase のまま）
-  const s0 = spawnSync(process.execPath, [cli, 'save', asePath], { encoding: 'utf8' });
-  check(s0.status === 0 && /変わった部位はありません/.test(s0.stdout), 'CLI save（直していない .ase）: 何も書かない', s0.stdout.trim());
 
   // LibreSprite が保存した .ase（1 画素直したもの）から書き戻す
   const s1 = spawnSync(process.execPath, [cli, 'save', editedPath, '--dir', dir], { encoding: 'utf8' });
@@ -176,7 +211,8 @@ async function modeInapp() {
   const files = {};
   for (const f of readdirSync(srcDir)) if (statSync(join(srcDir, f)).isFile()) files[`${memDir}/${f}`] = readFileSync(join(srcDir, f)).toString('base64');
   const editLayer = values['edit-layer'];
-  const [ex, ey, editBefore] = pickEditPixel(srcDir, editLayer);
+  const want = await expectNoEdit(srcDir);
+  const [ex, ey, editBefore] = pickEditPixel(want, editLayer);
   // 権限の宣言（///permission）は外す: 本物の fs を使わないので要らない
   const editor = readFileSync(join(ROOT, 'parts-editor.js'), 'utf8').replace(/^\/\/\/permission.*$/gm, '');
   const script = [
@@ -197,9 +233,12 @@ async function modeInapp() {
   const order = core.readPartsJson(readFileSync(join(srcDir, 'parts.json'), 'utf8')).order;
   check(JSON.stringify(r.layers) === JSON.stringify(expectedLayers(order)), 'レイヤーの名前・並び（奥 → 手前）・表示・編集の可否', `${r.layers.length} レイヤー`);
   check(JSON.stringify(r.size) === JSON.stringify([editBefore.width, editBefore.height, 0]), '絵の大きさと色の形（RGB）', JSON.stringify(r.size));
-  checkFlat(core.decodePng(Buffer.from(r.flatPng, 'base64')), 'inapp');
-  check(Array.isArray(r.writesNoEdit) && r.writesNoEdit.length === 0, '直さずに書き戻す: 何も書かない', JSON.stringify(r.writesNoEdit));
-  check(JSON.stringify(r.toggleGuide) === '[false,true]' && JSON.stringify(r.toggleHidden) === '[true,false]' && JSON.stringify(r.toggleMap) === '[true,false]', '表示の切り替え（ガイド・隠れた所・map）', JSON.stringify([r.toggleGuide, r.toggleHidden, r.toggleMap]));
+  checkFlat(core.decodePng(Buffer.from(r.flatPng, 'base64')), want, 'inapp');
+  const noEdit = Array.isArray(r.writesNoEdit) ? r.writesNoEdit.map((p) => p.slice(memDir.length + 1)).sort() : null;
+  if (!want.files.length) check(noEdit && noEdit.length === 0, '直さずに書き戻す: 何も書かない', JSON.stringify(r.writesNoEdit));
+  else check(JSON.stringify(noEdit) === JSON.stringify(want.files), `直さずに書き戻す: はみ出しの分け直しで ${want.files.length} ファイルを書く（Node の見込みと同じ）`, JSON.stringify(noEdit));
+  check(JSON.stringify(r.toggleGuide) === '[false,true]' && JSON.stringify(r.toggleMap) === '[true,false]', '表示の切り替え（ガイド・map）', JSON.stringify([r.toggleGuide, r.toggleMap]));
+  check(r.toggleHidden === null, '隠れた所の切り替えは無い（toggle("hidden") は対象なし）', JSON.stringify(r.toggleHidden));
   const w = r.writesEdit ?? [];
   check(w.length === 1 && w[0][0] === `${memDir}/${editLayer}.png`, '1 画素直して書き戻す: 直した部位の PNG だけを書く', JSON.stringify(w.map((x) => x[0])));
   if (w[0]) {

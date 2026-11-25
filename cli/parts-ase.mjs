@@ -2,7 +2,8 @@
 // 補助の CLI: fs の口の無い LibreSprite（1.3 など）のために、部位のフォルダと .ase を行き来する。
 //
 //   node cli/parts-ase.mjs open  <部位のフォルダ> [--out <file.ase>]
-//     部位を、レイヤーに分けた .ase にする（既定の置き場: フォルダの隣の <フォルダ名>.ase）
+//     部位を、部位ごとに 1 枚（見えている所と隠れた所を重ねたもの）のレイヤーの .ase にする
+//     （既定の置き場: フォルダの隣の <フォルダ名>.ase）
 //   node cli/parts-ase.mjs save  <file.ase> [--dir <部位のフォルダ>] [--dry-run] [--no-map]
 //     LibreSprite で直して保存した .ase から、部位ごとの PNG へ書き戻す（画素の変わったファイルだけ）
 //   node cli/parts-ase.mjs check <部位のフォルダ>
@@ -43,19 +44,21 @@ export function editedFromAse(ase, info) {
     throw new Error(`.ase の大きさ ${ase.width}×${ase.height} が部位の ${info.width}×${info.height} と違います`);
   const byName = new Map();
   for (const l of ase.layers) if (l.type === 0 && !byName.has(l.name)) byName.set(l.name, l);
-  const edited = { own: {}, hidden: {} };
-  let found = 0;
-  for (const name of info.order) {
+  // 前の形（<部位>.hidden のレイヤーのある .ase）は、core.collectParts が 1 枚に寄せる
+  const c = core.collectParts(info.order, info.width, info.height, (name) => {
     const l = byName.get(name);
-    if (l) {
-      edited.own[name] = l.image ?? core.blank(info.width, info.height);
-      found++;
-    }
-    const h = byName.get(name + core.LAYER.hiddenSuffix);
-    if (h) edited.hidden[name] = h.image ?? core.blank(info.width, info.height);
-  }
-  if (!found) throw new Error('.ase に部位のレイヤーがありません');
-  return edited;
+    return l ? (l.image ?? core.blank(info.width, info.height)) : null;
+  });
+  if (!c.found) throw new Error('.ase に部位のレイヤーがありません');
+  return { parts: c.parts, notes: c.notes };
+}
+
+/** 書くファイル 1 件を日本語で（例: "torso.png（12 画素。見えている所 → 隠れた所 3）"） */
+export function describeWrite(w) {
+  const extra = [];
+  if (w.toHidden) extra.push(`見えている所 → 隠れた所 ${w.toHidden}`);
+  if (w.toOwn) extra.push(`隠れた所 → 見えている所 ${w.toOwn}`);
+  return `${w.file}（${w.diff} 画素${extra.length ? '。' + extra.join('、') : ''}）`;
 }
 
 export async function planFromAse(asePath, dir, options) {
@@ -117,7 +120,7 @@ async function main(argv) {
       console.log('変わった部位はありません（何も書いていません）');
       return 0;
     }
-    for (const w of plan.writes) console.log(`${values['dry-run'] ? '書く予定' : '書きます'}: ${w.file}${w.diff !== undefined ? `（${w.diff} 画素）` : ''}`);
+    for (const w of plan.writes) console.log(`${values['dry-run'] ? '書く予定' : '書きます'}: ${describeWrite(w)}`);
     if (!values['dry-run']) await core.writePlan(nodeIo, dir, plan);
     return 0;
   }
@@ -126,7 +129,10 @@ async function main(argv) {
     const ase = readAse(aseBytes(opened));
     const plan = core.planSave(opened.info, opened.current, editedFromAse(ase, opened.info), options);
     if (plan.writes.length) {
-      console.log(`往復で変わるファイルがあります: ${plan.writes.map((w) => w.file).join(', ')}`);
+      // 隠れた所の下書きが立ち絵の外へはみ出している方向では、重ねた見た目からの分け直しで画素が動く
+      const total = plan.writes.reduce((s, w) => s + w.diff, 0);
+      console.log(`往復で変わるファイルがあります（${plan.writes.length} ファイル・延べ ${total} 画素）:`);
+      for (const w of plan.writes) console.log(`  ${describeWrite(w)}`);
       return 1;
     }
     console.log(`往復で変わるファイルはありません（${opened.info.order.length} 部位・${opened.layers.length} レイヤー）`);
