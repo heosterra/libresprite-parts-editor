@@ -25,7 +25,7 @@ for (const line of `${r.stdout}`.split('\n')) {
   const m = /^RESULT (\S+) (.*)$/.exec(line);
   if (m) got[m[1]] = JSON.parse(m[2]);
 }
-const want = { hasFs: false, guide: [false, true], hidden: [true, false], map: [true, false], openDialog: false };
+const want = { hasFs: false, guide: [false, true], hidden: null, map: [true, false], openDialog: false };
 let ng = 0;
 for (const [k, v] of Object.entries(want)) {
   const ok = JSON.stringify(got[k]) === JSON.stringify(v);

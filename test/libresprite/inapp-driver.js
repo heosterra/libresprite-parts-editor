@@ -46,14 +46,14 @@
     }
     out('flatPng', __b64(PartsCore.encodePng({ width: W, height: H, data: flat })));
 
-    // 直さずに書き戻す → 何も書かれないこと
+    // 直さずに書き戻す → はみ出しの無い方向では何も書かれないこと（はみ出しのある方向は run.mjs が見込みと比べる）
     __memfs.writes = [];
     await PartsApp.save(dir, report);
     out('writesNoEdit', __memfs.writes.map(function (w) { return w.path; }));
 
-    // 表示の切り替え
+    // 表示の切り替え（隠れた所のレイヤーは無くなったので、hidden は対象なしで null）
     out('toggleGuide', [PartsApp.toggle('guide'), PartsApp.toggle('guide')]);
-    out('toggleHidden', [PartsApp.toggle('hidden'), PartsApp.toggle('hidden')]);
+    out('toggleHidden', PartsApp.toggle('hidden'));
     out('toggleMap', [PartsApp.toggle('map'), PartsApp.toggle('map')]);
 
     // 1 画素だけ直して書き戻す

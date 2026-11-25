@@ -17,7 +17,7 @@ var PartsCore = (function () {
   // 決め（README の「決めたこと」と揃える）
   // ---------------------------------------------------------------------------
   var LAYER = {
-    hiddenSuffix: '.hidden', // 隠れた所の下書きのレイヤー: <部位>.hidden（ファイルの名前と同じ）
+    hiddenSuffix: '.hidden', // 前の形（v0.1）の隠れた所のレイヤー: <部位>.hidden。読むときに部位のレイヤーへ寄せる
     guidePrefix: 'guide:', // ガイドのレイヤー: guide:<部位>
     map: 'map', // map.png のレイヤー
   };
@@ -642,9 +642,11 @@ var PartsCore = (function () {
   }
 
   /**
-   * 部位のガイド: 見えている所と隠れた所を合わせた形の縁を、部位の色で引く。
-   * 縁の画素が見えている所なら線、隠れた所（他の部位の下）なら 1 つおきの点。
-   * 関節（json の root・tip）は不透明な 1 画素の点。
+   * 部位のガイド: 見えている所と隠れた所を合わせた形の、1 画素外側の輪を、部位の色で引く。
+   * ガイドは部位のレイヤーの下に置くので、形の内側の縁に引くと部位の画素に全部隠れてしまう。
+   * 外側の輪なら、部位の外（何も描いていない所）や、直して部位の画素を消した所で見える。
+   * 輪の画素が見えている所に接していれば線、隠れた所（他の部位の下）にだけ接していれば 1 つおきの点。
+   * 関節（json の root・tip）は不透明な 1 画素の点（部位の内側なので、部位のレイヤーを隠すと見える）。
    */
   function guideImage(own, hidden, color, joints, part) {
     var w = own.width;
@@ -655,12 +657,16 @@ var PartsCore = (function () {
       var i = (y * w + x) * 4 + 3;
       return own.data[i] > 0 || (hidden && hidden.data[i] > 0);
     };
+    var isOwn = function (x, y) {
+      if (x < 0 || y < 0 || x >= w || y >= h) return false;
+      return own.data[(y * w + x) * 4 + 3] > 0;
+    };
     for (var y = 0; y < h; y++)
       for (var x = 0; x < w; x++) {
-        if (!inShape(x, y)) continue;
-        if (inShape(x - 1, y) && inShape(x + 1, y) && inShape(x, y - 1) && inShape(x, y + 1)) continue;
+        if (inShape(x, y)) continue;
+        if (!inShape(x - 1, y) && !inShape(x + 1, y) && !inShape(x, y - 1) && !inShape(x, y + 1)) continue;
         var i = (y * w + x) * 4;
-        var visible = own.data[i + 3] > 0;
+        var visible = isOwn(x - 1, y) || isOwn(x + 1, y) || isOwn(x, y - 1) || isOwn(x, y + 1);
         if (!visible && (x + y) % 2) continue;
         out.data[i] = color[0];
         out.data[i + 1] = color[1];
@@ -686,7 +692,9 @@ var PartsCore = (function () {
 
   /**
    * 読み込んだ部位から、レイヤーの並び（下 = 奥から上 = 手前）を作る。
-   * 返す各要素: { name, image, visible, editable, kind: 'part'|'hidden'|'map'|'guide', part }
+   * 並び: map → guide:<部位>（order の順）→ <部位>（order の順、奥 → 手前）。
+   * ガイドと map は部位の画素の下に置き、部位の絵に被らないようにする。
+   * 返す各要素: { name, image, visible, editable, kind: 'part'|'map'|'guide', part }
    */
   function buildLayers(info, files) {
     var order = info.order;
@@ -700,11 +708,6 @@ var PartsCore = (function () {
       partByName[p.name] = p;
     });
     var layers = [];
-    order.forEach(function (name) {
-      // レイヤーの画素は写しにする（直したときに、読み込んだ元の画素が変わらないように）
-      layers.push({ name: name + LAYER.hiddenSuffix, kind: 'hidden', part: name, image: hidden[name] ? copyImage(hidden[name]) : blank(w, h), visible: false, editable: true });
-      layers.push({ name: name, kind: 'part', part: name, image: own[name] ? copyImage(own[name]) : blank(w, h), visible: true, editable: true });
-    });
     layers.push({ name: LAYER.map, kind: 'map', part: null, image: files.map ? copyImage(files.map) : blank(w, h), visible: false, editable: false });
     order.forEach(function (name) {
       layers.push({
@@ -716,7 +719,58 @@ var PartsCore = (function () {
         editable: false,
       });
     });
+    order.forEach(function (name) {
+      // 部位ごとに 1 枚: 隠れた所の上に見えている所を重ねる（見えている所が優先）。
+      // 画素は新しく作る（直したときに、読み込んだ元の画素が変わらないように）
+      layers.push({ name: name, kind: 'part', part: name, image: composePart(own[name], hidden[name], w, h), visible: true, editable: true });
+    });
     return { layers: layers, colors: colors };
+  }
+
+  /** 部位の 1 枚の絵: hidden の上に own を重ねる（own の不透明でない画素が優先）。どちらも無ければ透明 */
+  function composePart(own, hidden, w, h) {
+    var out = hidden ? copyImage(hidden) : blank(w, h);
+    if (own) {
+      for (var i = 0; i < w * h; i++) {
+        var o = i * 4;
+        if (!own.data[o + 3]) continue;
+        out.data[o] = own.data[o];
+        out.data[o + 1] = own.data[o + 1];
+        out.data[o + 2] = own.data[o + 2];
+        out.data[o + 3] = own.data[o + 3];
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 重ねた見た目から、部位ごとの見えている所と隠れた所に分け直す。
+   * 画素ごとに、その画素を持つ（alpha > 0）部位のうち一番手前（order の後ろ）がその部位の見えている所、
+   * それより奥の部位の同じ画素はその部位の隠れた所。
+   */
+  function splitParts(order, parts, w, h) {
+    var own = {};
+    var hidden = {};
+    order.forEach(function (name) {
+      own[name] = blank(w, h);
+      hidden[name] = blank(w, h);
+    });
+    for (var i = 0; i < w * h; i++) {
+      var o = i * 4;
+      var front = true;
+      for (var k = order.length - 1; k >= 0; k--) {
+        var name = order[k];
+        var img = parts[name];
+        if (!img || !img.data[o + 3]) continue;
+        var dst = front ? own[name] : hidden[name];
+        dst.data[o] = img.data[o];
+        dst.data[o + 1] = img.data[o + 1];
+        dst.data[o + 2] = img.data[o + 2];
+        dst.data[o + 3] = img.data[o + 3];
+        front = false;
+      }
+    }
+    return { own: own, hidden: hidden };
   }
 
   /** 見えている所の部位から map.png を作り直す（重なった画素は手前の部位） */
@@ -727,7 +781,7 @@ var PartsCore = (function () {
       if (!img) return;
       var c = colors[name];
       for (var i = 0; i < w * h; i++) {
-        if (img.data[i * 4 + 3] < 128) continue;
+        if (!img.data[i * 4 + 3]) continue;
         map.data[i * 4] = c[0];
         map.data[i * 4 + 1] = c[1];
         map.data[i * 4 + 2] = c[2];
@@ -737,22 +791,22 @@ var PartsCore = (function () {
     return map;
   }
 
-  /** 見えている所どうしで重なった画素の数（直したあとの確かめ） */
-  function countOverlap(order, own, w, h) {
+  /** a と b の両方で alpha > 0 の画素の数（own ↔ hidden の移りの数え） */
+  function countBoth(a, b) {
+    if (!a || !b) return 0;
     var n = 0;
-    for (var i = 0; i < w * h; i++) {
-      var k = 0;
-      for (var p = 0; p < order.length; p++) if (own[order[p]] && own[order[p]].data[i * 4 + 3]) k++;
-      if (k > 1) n++;
-    }
+    for (var i = 3; i < a.data.length; i += 4) if (a.data[i] && b.data[i]) n++;
     return n;
   }
 
   /**
    * 書き戻すファイルを決める。
-   * current: 今のファイルの画素 { own, hidden, map, jsonText }（無いファイルは undefined）
-   * edited:  レイヤーの画素 { own, hidden }（レイヤーが見つからない部位は undefined）
-   * 返す: { writes: [{ file, kind, bytes|text, diff }], notes: [...] }
+   * current: 今のファイルの画素 { own, hidden, map }（無いファイルは undefined）
+   * edited:  部位のレイヤーの画素 { parts: { <部位>: image } }（レイヤーが見つからない部位は undefined）
+   *          parts の画素は「見えている所と隠れた所を重ねた 1 枚」。ここで分け直す（splitParts）。
+   * 返す: { writes: [{ file, kind, part, bytes, diff, toHidden, toOwn }], notes: [...] }
+   *   diff: そのファイルで変わる画素の数。toHidden: 見えている所 → 隠れた所へ移った画素（own のファイル）、
+   *   toOwn: 隠れた所 → 見えている所へ移った画素（hidden のファイル）。
    * 画素の変わらないファイルは書かない（PNG の作り直しで中身の同じファイルのバイト列を変えないため）。
    */
   function planSave(info, current, edited, options) {
@@ -761,31 +815,42 @@ var PartsCore = (function () {
     var w = info.width;
     var h = info.height;
     var writes = [];
-    var notes = [];
-    var ownAfter = {};
-    var hiddenAfter = {};
+    var notes = (edited.notes || []).slice();
+    var parts = {};
+    var missing = {};
     order.forEach(function (name) {
+      var img = edited.parts && edited.parts[name];
+      if (!img) {
+        // レイヤーが無い部位は、今のファイルの重ねた絵を代わりに使い（分け直しの奥・手前のため）、そのファイルは書かない
+        missing[name] = true;
+        notes.push('layer not found, files left as is: ' + name + '.png, ' + name + '.hidden.png');
+        parts[name] = composePart(current.own[name], current.hidden[name], w, h);
+        return;
+      }
+      if (img.width !== w || img.height !== h) throw new Error('layer size differs: ' + name);
+      parts[name] = img;
+    });
+    var split = splitParts(order, parts, w, h);
+    var ownAfter = {};
+    order.forEach(function (name) {
+      ownAfter[name] = missing[name] ? current.own[name] : split.own[name];
+      if (missing[name]) return;
       [
-        ['own', name + '.png', current.own, edited.own, ownAfter],
-        ['hidden', name + '.hidden.png', current.hidden, edited.hidden, hiddenAfter],
+        ['own', name + '.png', current.own[name], split.own[name]],
+        ['hidden', name + '.hidden.png', current.hidden[name], split.hidden[name]],
       ].forEach(function (t) {
-        var kind = t[0];
-        var file = t[1];
-        var before = t[2][name];
-        var after = t[3][name];
-        if (!after) {
-          notes.push('layer not found, file left as is: ' + file);
-          t[4][name] = before;
-          return;
-        }
-        if (after.width !== w || after.height !== h) throw new Error('layer size differs: ' + file);
-        t[4][name] = after;
+        var before = t[2];
+        var after = t[3];
+        // 元のファイルが無く、分け直しても空なら作らない
+        if (!before && countDiff(blank(w, h), after) === 0) return;
         if (before && samePixels(before, after)) return;
-        writes.push({ file: file, kind: kind, part: name, bytes: encodePng(normalize(copyImage(after))), diff: before ? countDiff(before, after) : w * h });
+        var item = { file: t[1], kind: t[0], part: name, bytes: encodePng(normalize(copyImage(after))), diff: before ? countDiff(before, after) : countDiff(blank(w, h), after) };
+        // 移りの数: own のファイルなら「前は own、いまは hidden」、hidden のファイルなら「前は hidden、いまは own」
+        if (t[0] === 'own') item.toHidden = countBoth(before, split.hidden[name]);
+        else item.toOwn = countBoth(before, split.own[name]);
+        writes.push(item);
       });
     });
-    var overlap = countOverlap(order, ownAfter, w, h);
-    if (overlap) notes.push(overlap + ' px are visible in 2+ part layers (map.png takes the front part)');
     if (options.updateMap !== false && current.map) {
       var colors = partColors(order, current.own, current.map);
       var map = rebuildMap(order, ownAfter, colors, w, h);
@@ -799,6 +864,40 @@ var PartsCore = (function () {
 
   function copyImage(img) {
     return { width: img.width, height: img.height, data: new Uint8Array(img.data) };
+  }
+
+  /** 書くファイル 1 件の説明（例: "torso.png (12 px, 3 px moved to hidden)"） */
+  function describeWrite(w) {
+    var s = w.file + ' (' + w.diff + ' px';
+    if (w.toHidden) s += ', ' + w.toHidden + ' px moved to hidden';
+    if (w.toOwn) s += ', ' + w.toOwn + ' px moved to visible';
+    return s + ')';
+  }
+
+  /**
+   * レイヤーから、planSave に渡す部位の画素を集める。
+   * pick(layerName) は、その名前のレイヤーの画素（絵の大きさ）か、無ければ null/undefined を返す。
+   * 前の形（v0.1: <部位> と <部位>.hidden の 2 枚）の絵なら、<部位> を <部位>.hidden の上に重ねて 1 枚に寄せる。
+   * 返す: { parts: { <部位>: image }, found: 見つかった部位の数, legacy: 寄せた部位の名前の配列, notes }
+   */
+  function collectParts(order, w, h, pick) {
+    var parts = {};
+    var legacy = [];
+    var found = 0;
+    order.forEach(function (name) {
+      var img = pick(name);
+      var hid = pick(name + LAYER.hiddenSuffix);
+      if (!img && !hid) return;
+      found++;
+      if (hid) {
+        legacy.push(name);
+        parts[name] = composePart(img || null, hid, w, h);
+      } else parts[name] = img;
+    });
+    var notes = [];
+    if (legacy.length)
+      notes.push('old layout: merged ' + legacy.length + ' "<part>.hidden" layers into their part layers (reopen the folder to get the new layout)');
+    return { parts: parts, found: found, legacy: legacy, notes: notes };
   }
 
   /** フォルダのファイルの一覧から json の名前を決める（parts.json があればそれ、無ければ .json が 1 つだけのとき） */
@@ -914,6 +1013,10 @@ var PartsCore = (function () {
     partColors: partColors,
     guideImage: guideImage,
     buildLayers: buildLayers,
+    composePart: composePart,
+    splitParts: splitParts,
+    collectParts: collectParts,
+    describeWrite: describeWrite,
     rebuildMap: rebuildMap,
     planSave: planSave,
     pickJson: pickJson,
@@ -1053,19 +1156,12 @@ var PartsApp = (function (core) {
       throw new Error('the sprite is ' + spr.width + 'x' + spr.height + ' but the parts are ' + info.width + 'x' + info.height);
     if (spr.colorMode !== 0) throw new Error('the sprite is not RGB (set Sprite > Color Mode to RGB)');
     var byName = layersByName(spr);
-    var edited = { own: {}, hidden: {} };
-    var found = 0;
-    info.order.forEach(function (name) {
+    var c = core.collectParts(info.order, info.width, info.height, function (name) {
       var l = byName[name];
-      if (l) {
-        edited.own[name] = layerPixels(l, info.width, info.height);
-        found++;
-      }
-      var hl = byName[name + core.LAYER.hiddenSuffix];
-      if (hl) edited.hidden[name] = layerPixels(hl, info.width, info.height);
+      return l ? layerPixels(l, info.width, info.height) : null;
     });
-    if (!found) throw new Error('the sprite has no layer named after a part');
-    return edited;
+    if (!c.found) throw new Error('the sprite has no layer named after a part');
+    return { parts: c.parts, notes: c.notes };
   }
 
   /** 書き戻す（fs の口が要る） */
@@ -1078,7 +1174,7 @@ var PartsApp = (function (core) {
       var plan = core.planSave(r.info, r.current, edited, options);
       return core.writePlan(io, dir, plan).then(function () {
         var lines = plan.writes.map(function (w) {
-          return w.file + (w.diff !== undefined ? ' (' + w.diff + ' px)' : '');
+          return core.describeWrite(w);
         });
         report(
           (plan.writes.length ? 'Saved: ' + lines.join(', ') : 'No part changed (nothing written)') +
@@ -1089,7 +1185,7 @@ var PartsApp = (function (core) {
     });
   }
 
-  /** 種類ごとにレイヤーの表示を切り替える（kind: 'guide' | 'hidden' | 'map'） */
+  /** 種類ごとにレイヤーの表示を切り替える（kind: 'guide' | 'map'） */
   function toggle(kind) {
     var spr = app.activeSprite;
     if (!spr) return null;
@@ -1099,7 +1195,6 @@ var PartsApp = (function (core) {
       var l = spr.layer(i);
       var name = l.name;
       if (kind === 'guide' && name.indexOf(core.LAYER.guidePrefix) === 0) targets.push(l);
-      else if (kind === 'hidden' && name.length > core.LAYER.hiddenSuffix.length && name.slice(-core.LAYER.hiddenSuffix.length) === core.LAYER.hiddenSuffix) targets.push(l);
       else if (kind === 'map' && name === core.LAYER.map) targets.push(l);
     }
     if (!targets.length) return null;
@@ -1182,7 +1277,6 @@ var PartsApp = (function (core) {
       dialog.addBreak();
     }
     dialog.addButton('Guides', 'guide');
-    dialog.addButton('Hidden', 'hidden');
     dialog.addButton('Map', 'map');
     dialog.addBreak();
     dialog.addLabel('', 'status');
@@ -1216,10 +1310,10 @@ var PartsApp = (function (core) {
       run('Saving', function () {
         return save(d, status);
       });
-    } else if (e === 'guide_click' || e === 'hidden_click' || e === 'map_click') {
+    } else if (e === 'guide_click' || e === 'map_click') {
       var kind = e.replace(/_click$/, '');
       var shown = toggle(kind);
-      var label = { guide: 'Guide', hidden: 'Hidden', map: 'Map' }[kind];
+      var label = { guide: 'Guide', map: 'Map' }[kind];
       status(shown === null ? 'No ' + label.toLowerCase() + ' layers in the active sprite' : label + ' layers ' + (shown ? 'shown' : 'hidden'));
     } else if (/_close$/.test(e)) {
       // 窓の閉じるボタン（新しい版は parts_editor_close。1.3 は窓に id が無い）
