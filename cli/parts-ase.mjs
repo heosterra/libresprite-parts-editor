@@ -20,6 +20,12 @@ import { readAse, writeAse } from '../lib/ase.mjs';
 const require = createRequire(import.meta.url);
 const { core } = require('../parts-editor.js');
 
+/** 部位のフォルダの形の説明（core.folderFormat） */
+export const FORMAT_LABEL = {
+  one: '部位のフォルダの形: 1 枚（<部位>.png だけ。見えている所は map.png で決まる）。書き戻しは <部位>.png にそのまま書き、map.png と .hidden.png は書かない',
+  split: '部位のフォルダの形: 2 枚（<部位>.png と <部位>.hidden.png）。書き戻しは重ねた見た目から分け直す',
+};
+
 /** Node の fs を core の io の形にする */
 export const nodeIo = {
   list: async (dir) => readdirSync(dir).filter((n) => statSync(join(dir, n)).isFile()),
@@ -56,6 +62,7 @@ export function editedFromAse(ase, info) {
 /** 書くファイル 1 件を日本語で（例: "torso.png（12 画素。見えている所 → 隠れた所 3）"） */
 export function describeWrite(w) {
   const extra = [];
+  if (w.visibleDiff) extra.push(`うち見えている所（map.png）${w.visibleDiff}`);
   if (w.toHidden) extra.push(`見えている所 → 隠れた所 ${w.toHidden}`);
   if (w.toOwn) extra.push(`隠れた所 → 見えている所 ${w.toOwn}`);
   return `${w.file}（${w.diff} 画素${extra.length ? '。' + extra.join('、') : ''}）`;
@@ -109,12 +116,14 @@ async function main(argv) {
     const out = values.out ?? defaultAsePath(target);
     writeFileSync(out, aseBytes(opened));
     console.log(`${out} を作りました（${opened.layers.length} レイヤー。奥 → 手前: ${opened.info.order.join(' → ')}）`);
+    console.log(FORMAT_LABEL[opened.info.format]);
     if (opened.info.missing.length) console.log(`PNG の無い部位（空のレイヤー）: ${opened.info.missing.join(', ')}`);
     return 0;
   }
   if (cmd === 'save') {
     const dir = values.dir ?? defaultDir(target);
-    const { plan } = await planFromAse(target, dir, options);
+    const { plan, info } = await planFromAse(target, dir, options);
+    console.log(FORMAT_LABEL[info.format]);
     for (const n of plan.notes) console.log(`注意: ${n}`);
     if (!plan.writes.length) {
       console.log('変わった部位はありません（何も書いていません）');
@@ -128,6 +137,7 @@ async function main(argv) {
     const opened = await openFolder(target);
     const ase = readAse(aseBytes(opened));
     const plan = core.planSave(opened.info, opened.current, editedFromAse(ase, opened.info), options);
+    console.log(FORMAT_LABEL[opened.info.format]);
     if (plan.writes.length) {
       // 隠れた所の下書きが立ち絵の外へはみ出している方向では、重ねた見た目からの分け直しで画素が動く
       const total = plan.writes.reduce((s, w) => s + w.diff, 0);
