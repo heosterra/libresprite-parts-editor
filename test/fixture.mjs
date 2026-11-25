@@ -90,16 +90,34 @@ export const PROTRUDE = [
 /**
  * 一時のフォルダに 〇〇-parts を作り、そのパスを返す（立ち絵は隣に <名前>.png）。
  * options.protrude: 胴の隠れた所に、立ち絵の外へはみ出す画素（PROTRUDE）を足す
+ * options.one: 1 枚の形（heosterra の 2026-11-25 から）。<部位>.png は見えている所＋隠れた所の 1 枚で、.hidden.png は書かない。
+ *   map.png の頭の色は heosterra の PART_COLORS の頭の色にする（1 枚の形では、名前の分かる部位は PART_COLORS で見えている所を引くため）。
+ *   imgs.full に部位の 1 枚の絵を入れて返す
  */
+export const HEAD_PART_COLOR = [240, 200, 80];
+
 export function makeFixtureDir(name = 'fx', options = {}) {
   const root = mkdtempSync(join(tmpdir(), 'parts-editor-test-'));
   const dir = join(root, `${name}-parts`);
   mkdirSync(dir);
   const imgs = makeImages();
   if (options.protrude) for (const [x, y] of PROTRUDE) imgs.hidden.torso.data.set([90, 120, 200, 255], (y * GRID + x) * 4);
-  for (const n of ORDER) {
-    writeFileSync(join(dir, `${n}.png`), encodePng(imgs.own[n]));
-    writeFileSync(join(dir, `${n}.hidden.png`), encodePng(imgs.hidden[n]));
+  if (options.one) {
+    imgs.full = {};
+    for (const n of ORDER) {
+      const full = { width: GRID, height: GRID, data: new Uint8Array(imgs.hidden[n].data) };
+      for (let i = 0; i < GRID * GRID; i++) if (imgs.own[n].data[i * 4 + 3]) full.data.set(imgs.own[n].data.subarray(i * 4, i * 4 + 4), i * 4);
+      imgs.full[n] = full;
+      writeFileSync(join(dir, `${n}.png`), encodePng(full));
+    }
+    for (let i = 0; i < GRID * GRID; i++)
+      if (imgs.map.data[i * 4 + 3] && imgs.map.data[i * 4] === MAP_COLORS.head[0] && imgs.map.data[i * 4 + 2] === MAP_COLORS.head[2])
+        imgs.map.data.set([...HEAD_PART_COLOR, 255], i * 4);
+  } else {
+    for (const n of ORDER) {
+      writeFileSync(join(dir, `${n}.png`), encodePng(imgs.own[n]));
+      writeFileSync(join(dir, `${n}.hidden.png`), encodePng(imgs.hidden[n]));
+    }
   }
   writeFileSync(join(dir, 'map.png'), encodePng(imgs.map));
   writeFileSync(join(dir, 'parts.json'), JSON.stringify(makeJson(), null, 2));

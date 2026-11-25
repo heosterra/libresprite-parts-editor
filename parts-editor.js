@@ -596,10 +596,17 @@ var PartsCore = (function () {
   }
 
   /** map.png から部位の色を読む（その部位の見えている所でいちばん多い色）。読めなければ PART_COLORS、それも無ければ決まった色 */
-  function partColors(order, own, map) {
+  function partColors(order, own, map, preferKnown) {
     var colors = {};
     order.forEach(function (name, k) {
       var img = own[name];
+      // 1 枚の形では部位の絵が隠れた所も含むので、map の色の多数決は他の部位の色になりうる
+      // （見えている所の無い部位は、多数決だと手前の部位の色を取ってしまう）。名前の分かる部位は PART_COLORS を使う
+      // （heosterra の labelsFromMap と同じ: map の色をいちばん近い PART_COLORS の部位にする）
+      if (preferKnown && PART_COLORS[name]) {
+        colors[name] = PART_COLORS[name].slice();
+        return;
+      }
       var count = {};
       var best = null;
       var bestN = 0;
@@ -700,9 +707,16 @@ var PartsCore = (function () {
     var order = info.order;
     var w = info.width;
     var h = info.height;
+    var one = info.format === 'one';
     var own = files.own;
     var hidden = files.hidden;
-    var colors = partColors(order, own, files.map);
+    var colors = partColors(order, own, files.map, one);
+    if (one) {
+      // 1 枚の形: <部位>.png を、map.png で見えている所と、それ以外（隠れた所の描き足し）に分けてガイドに使う
+      var vis = splitByMap(order, own, files.map, colors, w, h);
+      own = vis.visible;
+      hidden = vis.rest;
+    }
     var partByName = {};
     (info.json.parts || []).forEach(function (p) {
       partByName[p.name] = p;
@@ -720,11 +734,60 @@ var PartsCore = (function () {
       });
     });
     order.forEach(function (name) {
-      // 部位ごとに 1 枚: 隠れた所の上に見えている所を重ねる（見えている所が優先）。
+      // 部位ごとに 1 枚: 隠れた所の上に見えている所を重ねる（見えている所が優先）。1 枚の形では <部位>.png をそのまま。
       // 画素は新しく作る（直したときに、読み込んだ元の画素が変わらないように）
-      layers.push({ name: name, kind: 'part', part: name, image: composePart(own[name], hidden[name], w, h), visible: true, editable: true });
+      var image = one ? (files.own[name] ? copyImage(files.own[name]) : blank(w, h)) : composePart(own[name], hidden[name], w, h);
+      layers.push({ name: name, kind: 'part', part: name, image: image, visible: true, editable: true });
     });
     return { layers: layers, colors: colors };
+  }
+
+  /**
+   * map.png から、画素ごとの部位（見えている所の印）を読む。色はいちばん近い部位の色（heosterra の labelsFromMap と同じ考え方）。
+   * 返す: 画素ごとの部位の名前の配列（map の透明な画素は null）
+   */
+  function mapLabels(order, colors, map, w, h) {
+    var out = new Array(w * h);
+    for (var i = 0; i < w * h; i++) {
+      out[i] = null;
+      if (!map || !map.data[i * 4 + 3]) continue;
+      var best = null;
+      var bestD = Infinity;
+      for (var k = 0; k < order.length; k++) {
+        var c = colors[order[k]];
+        var d = 0;
+        for (var ch = 0; ch < 3; ch++) d += (c[ch] - map.data[i * 4 + ch]) * (c[ch] - map.data[i * 4 + ch]);
+        if (d < bestD) {
+          bestD = d;
+          best = order[k];
+        }
+      }
+      out[i] = best;
+    }
+    return out;
+  }
+
+  /** 1 枚の形の部位の絵を、見えている所（map でその部位のマス）とそれ以外に分ける。ファイルは分けない（ガイドと数えに使う） */
+  function splitByMap(order, parts, map, colors, w, h) {
+    var labels = mapLabels(order, colors, map, w, h);
+    var visible = {};
+    var rest = {};
+    order.forEach(function (name) {
+      var img = parts[name];
+      visible[name] = blank(w, h);
+      rest[name] = blank(w, h);
+      if (!img) return;
+      for (var i = 0; i < w * h; i++) {
+        var o = i * 4;
+        if (!img.data[o + 3]) continue;
+        var dst = labels[i] === name ? visible[name] : rest[name];
+        dst.data[o] = img.data[o];
+        dst.data[o + 1] = img.data[o + 1];
+        dst.data[o + 2] = img.data[o + 2];
+        dst.data[o + 3] = img.data[o + 3];
+      }
+    });
+    return { visible: visible, rest: rest, labels: labels };
   }
 
   /** 部位の 1 枚の絵: hidden の上に own を重ねる（own の不透明でない画素が優先）。どちらも無ければ透明 */
@@ -811,6 +874,7 @@ var PartsCore = (function () {
    */
   function planSave(info, current, edited, options) {
     options = options || {};
+    if (info.format === 'one') return planSaveOne(info, current, edited);
     var order = info.order;
     var w = info.width;
     var h = info.height;
@@ -866,9 +930,60 @@ var PartsCore = (function () {
     return { width: img.width, height: img.height, data: new Uint8Array(img.data) };
   }
 
+  /**
+   * 1 枚の形（info.format === 'one'）の書き戻し: 部位のレイヤーを、分け直さずにそのまま <部位>.png に書く。
+   * .hidden.png は作らない。map.png は書き換えない。画素の変わったファイルだけ書く。
+   * 見えている所（map.png でその部位のマス）の画素を変えたときは数えて知らせる（heosterra では、見えている所を集めた絵が
+   * 元の 1 枚 <向き>.png と全画素一致することを試験で縛っているため。見えている所を直すなら元の 1 枚を直して split をやり直す）
+   * 返す writes の各要素: { file, kind: 'part', part, bytes, diff, visibleDiff }
+   */
+  function planSaveOne(info, current, edited) {
+    var order = info.order;
+    var w = info.width;
+    var h = info.height;
+    var writes = [];
+    var notes = (edited.notes || []).slice();
+    var colors = partColors(order, current.own, current.map, true);
+    var labels = current.map ? mapLabels(order, colors, current.map, w, h) : null;
+    var visibleTotal = 0;
+    order.forEach(function (name) {
+      var img = edited.parts && edited.parts[name];
+      if (!img) {
+        notes.push('layer not found, file left as is: ' + name + '.png');
+        return;
+      }
+      if (img.width !== w || img.height !== h) throw new Error('layer size differs: ' + name);
+      var before = current.own[name];
+      if (before && samePixels(before, img)) return;
+      if (!before && countDiff(blank(w, h), img) === 0) return;
+      var base = before || blank(w, h);
+      var visibleDiff = 0;
+      if (labels)
+        for (var i = 0; i < w * h; i++) if (labels[i] === name && !samePixel(base, img, i)) visibleDiff++;
+      visibleTotal += visibleDiff;
+      writes.push({ file: name + '.png', kind: 'part', part: name, bytes: encodePng(normalize(copyImage(img))), diff: countDiff(base, img), visibleDiff: visibleDiff });
+    });
+    if (visibleTotal)
+      notes.push(
+        visibleTotal +
+          ' px changed in visible cells (map.png). map.png is not rewritten, and the visible cells no longer match the original sprite'
+      );
+    return { writes: writes, notes: notes };
+  }
+
+  /** 1 画素を比べる（samePixels と同じ決まり: 透明どうしは色を見ない） */
+  function samePixel(a, b, i) {
+    var o = i * 4;
+    var aa = a.data[o + 3];
+    var ba = b.data[o + 3];
+    if (!aa && !ba) return true;
+    return aa === ba && a.data[o] === b.data[o] && a.data[o + 1] === b.data[o + 1] && a.data[o + 2] === b.data[o + 2];
+  }
+
   /** 書くファイル 1 件の説明（例: "torso.png (12 px, 3 px moved to hidden)"） */
   function describeWrite(w) {
     var s = w.file + ' (' + w.diff + ' px';
+    if (w.visibleDiff) s += ', ' + w.visibleDiff + ' px in visible cells';
     if (w.toHidden) s += ', ' + w.toHidden + ' px moved to hidden';
     if (w.toOwn) s += ', ' + w.toOwn + ' px moved to visible';
     return s + ')';
@@ -918,6 +1033,21 @@ var PartsCore = (function () {
   }
 
   /**
+   * 部位のフォルダの形。
+   * - 'one'（heosterra の 2026-11-25 から）: 部位ごとに <部位>.png が 1 枚（見えている所＋隠れた所の描き足し）。
+   *   どこが見えている所かは map.png（部位の色のマス）で決まる。.hidden.png は無い
+   * - 'split'（前の形）: <部位>.png（見えている所）と <部位>.hidden.png（隠れた所）の 2 枚
+   * .hidden.png が 1 つでもあれば 'split'、1 つも無ければ 'one'
+   */
+  function folderFormat(names) {
+    return names.some(function (n) {
+      return /\.hidden\.png$/i.test(n);
+    })
+      ? 'split'
+      : 'one';
+  }
+
+  /**
    * フォルダを読む（io は { list(dir) → 名前の並び, read(path) → Uint8Array, readText(path) → 文字列 } の Promise を返す口）。
    * 返す: { info, current, files }
    */
@@ -932,6 +1062,7 @@ var PartsCore = (function () {
           info = readPartsJson(text);
           info.jsonFile = jsonFile;
           info.dir = dir;
+          info.format = folderFormat(names);
           current.jsonText = text;
           var jobs = [];
           var readPng = function (file, set) {
@@ -1015,6 +1146,9 @@ var PartsCore = (function () {
     buildLayers: buildLayers,
     composePart: composePart,
     splitParts: splitParts,
+    splitByMap: splitByMap,
+    mapLabels: mapLabels,
+    folderFormat: folderFormat,
     collectParts: collectParts,
     describeWrite: describeWrite,
     rebuildMap: rebuildMap,
