@@ -98,7 +98,9 @@ async function expectNoEdit(dir) {
     for (let i = 0; i < w * h; i++) if (l.image.data[i * 4 + 3]) flat.data.set(l.image.data.subarray(i * 4, i * 4 + 4), i * 4);
   }
   const plan = core.planSave(opened.info, opened.current, { parts });
-  return { flat, files: plan.writes.map((x) => x.file).sort(), plan, own: core.splitParts(order, parts, w, h).own };
+  // 直す画素を選ぶ元: 2 枚の形は分け直したあとの見えている所、1 枚の形は <部位>.png そのもの
+  const own = opened.info.format === 'one' ? opened.current.own : core.splitParts(order, parts, w, h).own;
+  return { flat, files: plan.writes.map((x) => x.file).sort(), plan, own, format: opened.info.format };
 }
 
 /** ガイドを隠した合成が、部位を重ねた見込みの絵と同じか。立ち絵との違いも数で出す */
@@ -111,7 +113,9 @@ function checkFlat(flat, want, label) {
   const stand = refDecode(readFileSync(spritePath));
   const d = core.countDiff(flat, stand);
   // はみ出しの無い方向（直さずに書き戻して何も変わらない方向）では、立ち絵と同じはず
-  if (!want.files.length) check(d === 0, `${label}: 立ち絵とも同じ`, `違う画素 ${d}`);
+  // 1 枚の形は、order の順に重ねると手前の部位の描き足しが奥の部位の見えている所に被る所があり、立ち絵と少し違う（数だけ出す）
+  if (want.format === 'one') console.log(`     ${label}: 立ち絵と違う画素 ${d}（1 枚の形: 手前の部位の描き足しが、奥の部位の見えている所に被る所）`);
+  else if (!want.files.length) check(d === 0, `${label}: 立ち絵とも同じ`, `違う画素 ${d}`);
   else console.log(`     ${label}: 立ち絵と違う画素 ${d}（隠れた所の下書きが立ち絵の外へはみ出しているため）`);
 }
 
