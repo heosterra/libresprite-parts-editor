@@ -1,0 +1,206 @@
+# libresprite-parts-editor
+
+heosterra の部位のフォルダ（`〇〇-parts`。例: `docs/art/canon/character/girl/a-pose/s-parts`）を、**部位ごとのレイヤーに分けて LibreSprite で直し、部位ごとの PNG へ書き戻す**ための道具です。
+
+- `〇〇-parts` のフォルダを渡すと、中の `parts.json` を読み、部位をレイヤーに分けて読み込みます。
+- 読み込んだ直後は、json の `order` の順に奥 → 手前へレイヤーが並び、立ち絵と同じ絵になります。
+- 部位ごとに、ほかの部位に隠れた所も含めた形の縁が **ガイド** として出ます（隠れた所は点線）。`map.png` もレイヤーとして見られます。
+- 書き戻すと、画素の変わった部位の PNG だけが書き換わります。直していないファイルはバイト列まで変わりません。
+
+中身は 1 枚の LibreSprite のスクリプト [`parts-editor.js`](parts-editor.js) と、fs の口の無い版のための補助の CLI [`cli/parts-ase.mjs`](cli/parts-ase.mjs) です。どちらも依存はありません（CLI は Node 20 以上）。
+
+## どの LibreSprite で使うか
+
+LibreSprite のスクリプトからファイルを読み書きする口（`fs`）は、2026-10-12 に LibreSprite の master に入りました。いま配布されている最新の版 **1.3（2026-10-02）には入っていません**。そのため、使う LibreSprite によって手順が 2 つに分かれます。
+
+| LibreSprite | 読み込み | 直す | 書き戻し |
+| --- | --- | --- | --- |
+| **fs の口のある版**（master の 2026-10-12 以降の組み立て。次の配布版から） | スクリプトの窓の **Load** | LibreSprite | スクリプトの窓の **Save to parts** |
+| **1.3**（いまの配布版） | CLI の `open` で `.ase` を作って開く | LibreSprite | `.ase` に保存して CLI の `save` |
+
+どちらの手順でも、レイヤーの並び・名前・ガイド・書き戻しの決まりは同じです（同じ `parts-editor.js` の中身を使います）。fs の口のある版で、CLI が作った `.ase` を開いて窓の **Save to parts** で書き戻すこともできます。
+
+fs の口のある版は、いまは配布されていません。LibreSprite をソースから組むか、LibreSprite の GitHub Actions の master の組み立ての成果物（GitHub にログインが要ります）を使います。このリポジトリで確かめに使ったのは、Linux の組み立て（2026-11-16、`efdbb28`）の成果物です。
+
+## 入れ方
+
+1. [`parts-editor.js`](parts-editor.js) を、LibreSprite の設定フォルダの `scripts` に置きます。
+
+   | OS | 置き場 |
+   | --- | --- |
+   | Linux | `~/.config/libresprite/scripts/`（`XDG_CONFIG_HOME` があれば `$XDG_CONFIG_HOME/libresprite/scripts/`） |
+   | Windows | `%APPDATA%\LibreSprite\scripts\`（ポータブル版は実行ファイルの隣の `scripts\`） |
+   | macOS | `~/Library/Application Support/LibreSprite/scripts/` |
+
+2. LibreSprite を開き直すと、メニューの **Scripts** に `parts-editor` が出ます。
+3. fs の口のある版では、初めて走らせたときに権限の確認が出ます。**fs.read と fs.write を許してください**（部位のフォルダを読み、PNG を書き戻すのに使います）。1.3 では確認は出ません。
+4. 1.3 で使うときは、CLI も使える場所に置きます（このリポジトリを clone するか、`cli/` と `lib/` と `parts-editor.js` を同じ形で置く）。Node 20 以上が要ります。
+
+## 使い方（fs の口のある版）
+
+1. メニューの **Scripts → parts-editor** で窓を開きます。
+2. **Parts folder** に、部位のフォルダのパスを入れます（絶対パス。前後の引用符は外します）。前に使ったパスは覚えています。
+3. **Load** を押すと、新しい絵ができ、部位がレイヤーに分かれて並びます。
+4. ガイドを見ながら、部位のレイヤー（部位の名前のレイヤー）や、隠れた所のレイヤー（`<部位>.hidden`）を直します。
+5. **Save to parts** を押すと、そのとき前に出ている絵のレイヤーから、部位のフォルダの PNG へ書き戻します。窓の下に、書いたファイルと変わった画素の数が出ます。
+
+窓の文字は英語です（LibreSprite の画面の字体に日本語の字形が無く、日本語は □ になるため）。
+
+| 窓の部品 | すること |
+| --- | --- |
+| Parts folder | 部位のフォルダのパス |
+| Load | 読み込む（新しい絵を作る） |
+| Save to parts | 前に出ている絵から、部位の PNG へ書き戻す |
+| Guides | ガイドのレイヤー（`guide:<部位>`）を全部、表示 ↔ 非表示 |
+| Hidden | 隠れた所のレイヤー（`<部位>.hidden`）を全部、表示 ↔ 非表示 |
+| Map | `map` のレイヤーを表示 ↔ 非表示 |
+
+1 つの部位のガイドだけを見たいときは、LibreSprite のレイヤーの欄で、そのレイヤーの目のしるしを切り替えてください。
+
+読み込んだ絵は、LibreSprite の上では名前の無い新しい絵です。途中で作業を残したいときは、`.ase` に保存してかまいません。あとで開き直して **Save to parts** を押せば、部位へ書き戻せます（レイヤーの名前で部位を引くため）。
+
+## 使い方（1.3）
+
+```sh
+# 1. 部位のフォルダから .ase を作る（既定の置き場はフォルダの隣: s-parts → s-parts.ase）
+node cli/parts-ase.mjs open path/to/a-pose/s-parts
+
+# 2. LibreSprite 1.3 で s-parts.ase を開いて直し、.ase のまま保存する（Ctrl+S）
+#    Scripts → parts-editor の窓の Guides / Hidden / Map で、表示を切り替えられます
+
+# 3. 部位へ書き戻す（.ase の名前から、隣の同じ名前のフォルダへ書く）
+node cli/parts-ase.mjs save path/to/a-pose/s-parts.ase
+#    書く前に見るだけなら --dry-run。フォルダを指すなら --dir <部位のフォルダ>
+```
+
+| CLI | すること |
+| --- | --- |
+| `open <部位のフォルダ> [--out <file.ase>]` | 部位をレイヤーに分けた `.ase` を作る |
+| `save <file.ase> [--dir <部位のフォルダ>] [--dry-run] [--no-map]` | `.ase` から部位の PNG へ書き戻す（画素の変わったファイルだけ） |
+| `check <部位のフォルダ>` | 読み込み → `.ase` → 書き戻しの往復で、どのファイルも変わらないことを確かめる（何も書かない） |
+
+`.ase` は heosterra の作業ツリーの中（フォルダの隣）にできます。heosterra に入れないファイルなので、`--out` で別の場所に置くか、git の無視に入れてください。`--out` で別の場所に置いたときは、`save` に `--dir` を付けてください。
+
+## heosterra の部位のフォルダ（調べたこと）
+
+heosterra の `docs/art/canon/character/girl/a-pose/` に、少女の A ポーズの 5 方向（`e` `n` `ne` `s` `se`）の `〇〇-parts` があります。作っているのは heosterra の `docs/art/canon/character/scripts/model-parts.ts`（`split` と `fill`）です。
+
+| ファイル | 中身 |
+| --- | --- |
+| `<部位>.png` | その部位の **見えている所**（立ち絵の画素のうち、その部位に分けられたもの） |
+| `<部位>.hidden.png` | その部位の **隠れた所の下書き**（ほかの部位に隠れて立ち絵には出ない所。`fill` が描き足す） |
+| `map.png` | 部位の **見分けの地図**。立ち絵の画素ごとに、どの部位かを部位の色で塗ったもの。手で塗り直して `split --map` に渡すと、分け方を直せる |
+| `parts.json` | `grid`（絵の大きさ）、`joints`（3D の骨の関節の位置）、`parts`（部位ごとの `root`・`tip` の関節、親、画素の数）、`order`（重ねる順。**奥 → 手前**） |
+| `../<方向>.png` | 立ち絵（部位に分ける前の絵） |
+
+- PNG はどれも `grid`×`grid`（いまは 128×128）の全面の絵で、置く位置は (0, 0)、半透明の画素はありません。部位ごとに切り抜いたり、位置をずらしたりはしていません。
+- 部位の名前は 14（`torso` `head` `upper-arm-l` `forearm-l` `hand-l` `upper-arm-r` `forearm-r` `hand-r` `thigh-l` `shin-l` `foot-l` `thigh-r` `shin-r` `foot-r`）。
+- 見えている所どうしは重ならず、全部を合わせると立ち絵と画素まで同じです（5 方向とも確かめました）。
+- `parts.json` の `hidden`（隠れた所の画素の数）は `split` の時点の数で、`fill` のあとの `<部位>.hidden.png` とは揃っていません。
+
+## レイヤーの並び（決めたこと）
+
+下（奥）から上（手前）へ:
+
+| レイヤー | 中身 | 最初の表示 | 編集 |
+| --- | --- | --- | --- |
+| `<部位>.hidden` | `<部位>.hidden.png` | 隠す | できる |
+| `<部位>` | `<部位>.png` | 出す | できる |
+| （この 2 枚を `order` の順にくり返す） | | | |
+| `map` | `map.png` | 隠す | 鍵 |
+| `guide:<部位>` | 部位ごとのガイド（`order` の順） | 出す | 鍵 |
+
+- 隠れた所のレイヤーは、最初は隠します。出すと、立ち絵に下書きが混ざるためです（`se` では、下書きが立ち絵の外へ出る所があります）。隠したまま、見えている所のレイヤーだけで立ち絵と画素まで同じになります。
+- 隠れた所のレイヤーは、その部位のすぐ下に置きます。出したときに、その部位の見えている所の下に入るためです。
+- レイヤーの名前はファイルの名前と同じにしました（`head` ↔ `head.png`、`head.hidden` ↔ `head.hidden.png`）。書き戻しはレイヤーの名前で部位を引くので、**部位のレイヤーの名前は変えないでください**。名前の見つからない部位は書かずに知らせます。
+- `map` とガイドは鍵をかけています（うっかり描かないため）。書き戻しには使いません。
+
+## ガイド（決めたこと）
+
+- 部位ごとに、**見えている所と隠れた所を合わせた形の縁**を引きます。
+- 色は `map.png` のその部位の色（読めないときは heosterra の `model-parts.ts` の `PART_COLORS`、それも無い名前は部位ごとにずらした色）。
+- 縁の画素が見えている所なら **線**、隠れた所（ほかの部位の下）なら **1 つおきの点**。
+- `parts.json` のその部位の `root` と `tip` の関節に、不透明な 1 画素の **点**。
+- 線と点は不透明度 170/255 で、下の絵が少し透けます（レイヤーの不透明度は、スクリプトの口からは変えられないため、画素の不透明度で付けています）。
+- ガイドは読み込んだ時点の部位の形で作り、直しても描き直しません（直す前の形の目安として見るため）。
+
+## 書き戻し（決めたこと）
+
+- 書くのは `<部位>.png` と `<部位>.hidden.png`（レイヤーの名前で引く）と `map.png`。**画素の変わったファイルだけ**を書きます。画素が同じなら、PNG のバイト列も変えません。
+- 画素の比べ方: 大きさ・位置・不透明度・色。完全に透明な画素の色は問いません。書くときは、透明な画素の色を 0 に揃えます。
+- `map.png` は、見えている所のレイヤーから作り直し、変わったときだけ書きます。部位の間で画素を移したとき、`split --map` で分け直しても直した分け方が残るようにするためです（CLI では `--no-map` で書かないようにできます）。同じ画素が 2 つ以上の部位の見えている所にあると、`map.png` では手前の部位にし、そのことを知らせます。
+- `parts.json` は **読むだけで書き換えません**。中の画素の数（`pixels`・`hidden`）は、上のとおりもともと PNG と揃っていないので、数え直すと直していないのに json が変わってしまうためです。
+- 書く PNG は RGBA 8bit・フィルタなし。圧縮は、このスクリプトの中の deflate（固定ハフマン + LZ77）です。
+
+## LibreSprite のスクリプトの口（調べたこと）と、足りない所を埋めた手
+
+LibreSprite のソースの `src/app/script/api`（master と v1.3）と、同梱のスクリプト（`data/scripts`）を読んで決めました。
+
+| したいこと | fs の口のある版（master） | 1.3 | このスクリプトでの手 |
+| --- | --- | --- | --- |
+| フォルダの一覧・json・PNG を読む | `fs.listDir` / `fs.readFile`（`///permission fs.read` が要る） | **無い**（`storage` は設定フォルダの中だけ） | master は `fs`。1.3 は CLI |
+| PNG のバイト列を画素にする | 口が無い（`app.open` で開くことはできる） | 同じ | スクリプトの中に PNG の読み手（inflate）を持つ |
+| 新しい絵 | `command.NewFile({width, height, "color-mode", background})` | 同じ | `NewFile` |
+| レイヤーを足す | `command.NewLayer({name, top})`（`Sprite` に足す口は無い） | `command.NewLayer` はある | `NewLayer` |
+| レイヤーに画素を置く | `layer.createCel(frame)` → `cel.image.putImageData(RGBA)` | **`createCel` が無い**（空のレイヤーに cel を作れない） | master は `createCel`。1.3 は CLI が `.ase` を組む |
+| レイヤーの表示・鍵 | `layer.isVisible` / `layer.isEditable` | 同じ | 読み込み後に決め、窓のボタンで切り替え |
+| レイヤーの画素を読む | `layer.cel(0)` の `image.getImageData()` と `cel.x` / `cel.y`（cel は詰められて位置がずれることがある） | 同じ | 絵の大きさに戻してから比べる |
+| PNG を書く | `fs.writeFile(path, Uint8Array)`（`///permission fs.write`） | **無い**（`sprite.saveAs` は絵全体を書くだけ） | master はスクリプトの中の PNG の書き手 + `fs.writeFile`。1.3 は CLI |
+| 窓 | `app.createDialog(id)`、`addEntry` / `addButton` / `addLabel`、`onEvent` | `app.createDialog()`（id を取らない） | 両方で動く書き方にした |
+
+- 1.3 には `app.isHeadless` も無く、headless（`-b`）で `app.redraw()` を呼ぶと止まります。このスクリプトは、窓のあるときだけ描き直します。
+- 1.3 の補助の CLI に Node を選んだのは、heosterra の道具も Node で、依存なしで zlib が使えるためです。CLI が組む `.ase` は 1 コマ・RGBA・レイヤーごとに絵の大きさの cel 1 つで、LibreSprite の `docs/files/ase.txt` に従います。LibreSprite が保存した `.ase` の、詰めて位置のずれた cel も読めます。
+
+## 確かめたこと
+
+### 自動の試験（`npm test`）
+
+heosterra の絵は private のリポジトリのものなので、このリポジトリには入れていません。試験は、同じ形の小さな合成の部位のフォルダ（`test/fixture.mjs`）で行います。
+
+- PNG の読み書きと inflate / deflate を、Node の zlib と比べる（無圧縮・固定・動的ハフマン、フィルタ 0〜4、RGBA / RGB / グレー / パレット）
+- 読み込んだ直後のレイヤーの名前・並び・表示・鍵と、合成が立ち絵と同じこと
+- ガイドの線・点線・関節の点
+- 直さずに書き戻すと何も書かないこと
+- 1 画素直すと、その部位の PNG だけが書き換わり、直した 1 画素のほかは大きさ・位置・透明まで同じで、ほかのファイルはバイト列まで同じこと
+- 隠れた所のレイヤーを直したとき、画素を部位の間で移したとき（`map.png` も変わる）、レイヤーが消えたとき、見えている所が重なったとき
+- LibreSprite が詰めた cel（位置のずれた小さい cel）を読めること
+- CLI の `open` / `save` / `check`
+
+### 本物の LibreSprite での確かめ（`test/libresprite/run.mjs`）
+
+LibreSprite を headless（`-b --script`）で走らせて、往復を確かめる手順です。部位のフォルダは作業のフォルダへ写してから使い、元のフォルダは書き換えません。
+
+```sh
+node test/libresprite/run.mjs --libresprite <LibreSprite の実行ファイル> --parts <部位のフォルダ> [--mode ase|inapp|both] [--edit-layer head]
+```
+
+- `--mode ase`（1.3 の道）: CLI の `open` → LibreSprite で `.ase` を開き、レイヤーの名前・並び・表示・鍵を確かめ、ガイドを隠した合成を PNG に書き出して立ち絵と比べる → 1 画素直して `.ase` に保存 → CLI の `save` → 直した部位の PNG だけが変わり、直した 1 画素のほかは同じで、ほかのファイルはバイト列まで同じこと。書き戻した PNG を LibreSprite で開いて同じ画素になること。
+- `--mode inapp`（fs の口のある版の道）: `parts-editor.js` そのものを LibreSprite の中で走らせ、**Load** と **Save to parts** と同じ処理を通す。fs だけは記憶の中の模擬に差し替えます（下の「確かめられなかったこと」）。
+
+2026-11-26 に、heosterra の少女の A ポーズの 5 方向（`e` `n` `ne` `s` `se`）を写したもので、次の 2 つの LibreSprite について、上の確かめがすべて通りました。
+
+| LibreSprite | 道 |
+| --- | --- |
+| 1.3（配布版の Linux AppImage） | `ase` |
+| 1.3-dev（efdbb28。master の 2026-11-16 の Linux の組み立て） | `ase` と `inapp` |
+
+あわせて、1.3 でこのスクリプトが読めて、窓のボタンと同じ表示の切り替えが動くこと（`test/libresprite/run-v13-toggle.mjs`）、master の headless で窓を開いて画面を撮り、英語の文字が読めること（`test/libresprite/run-dialog-shot.mjs`）を確かめました。
+
+## 確かめられなかったこと
+
+- **画面のある LibreSprite で、人が窓を操作して使うこと**は確かめていません。確かめたのは headless（`-b`）で、窓のボタンの代わりに同じ関数を呼んだところまでです（窓の見た目は master の headless で撮った画面だけ）。
+- **本物の `fs` の口で読み書きすること**は確かめていません。headless の LibreSprite は、スクリプトの権限を確認なしに自動で与えるため、その形での実行は控えました。`fs` の口の形（`listDir` / `readFile` の `encoding: "binary"` / `writeFile` に `Uint8Array`）は LibreSprite のソースから読み、確かめでは同じ形の記憶の中の模擬を使っています。初めて走らせたときの権限の確認の窓も見ていません。
+- 1.3 の画面のある版での窓の見た目、Windows と macOS での動き、日本語を含むパスは確かめていません。
+- 1.3 で `.ase` を開いたまま、レイヤーの並べ替えやグループ化をした場合は試していません（1.3 は `.ase` のグループを読み込みで平らにします。書き戻しはレイヤーの名前で引くので、並べ替えは書き戻しに響きません）。
+
+## 試験の走らせ方
+
+```sh
+npm test
+# 本物の LibreSprite で（LibreSprite の実行ファイルと、写してよい部位のフォルダが要る）
+node test/libresprite/run.mjs --libresprite ~/LibreSprite.AppImage --parts /path/to/copy/of/s-parts
+```
+
+## ライセンス
+
+[MIT](LICENSE)
