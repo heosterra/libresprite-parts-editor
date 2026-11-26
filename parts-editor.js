@@ -700,13 +700,17 @@ var PartsCore = (function () {
     return out;
   }
 
-  /** 関節の点の位置（joints-drawn.json の値を画素へ。heosterra と同じく四捨五入） */
+  /**
+   * 関節の点の位置（joints-drawn.json の値を画素へ）。heosterra の座標は画素 i が i〜i+1 の範囲（真ん中が i + 0.5。
+   * transformPart が x + 0.5 で引く）なので、関節の入っている画素は切り捨てで決まる。
+   * 四捨五入にすると、左右対称の関節（例: 73.36 と 54.64）が片側だけ 1 画素ずれて見える
+   */
   function drawnPixel(j) {
-    return [Math.round(j.x), Math.round(j.y)];
+    return [Math.floor(j.x), Math.floor(j.y)];
   }
 
   /**
-   * 絵の上の関節 1 つのレイヤーの絵: 関節の位置に不透明な 1 画素、その上下左右に薄い印（DRAWN_RING_ALPHA）。
+   * 絵の上の関節 1 つのレイヤーの絵: 関節の入っている画素に不透明な 1 画素、その上下左右に薄い印（DRAWN_RING_ALPHA）。
    * 書き戻しは不透明な画素だけを関節として読む
    */
   function jointImage(w, h, j, color) {
@@ -942,7 +946,7 @@ var PartsCore = (function () {
   /**
    * 関節の書き戻し: joint:<関節> のレイヤーの不透明な画素を、その関節の位置として読む。
    * - 不透明な画素が、読み込んだときの位置（四捨五入した画素）だけ → 動いていない。値はそのまま（小数も残す）
-   * - それ以外の不透明な画素がちょうど 1 つ → そこへ動いた（元の位置の画素は消し忘れてもよい）。値は画素の位置（整数）
+   * - それ以外の不透明な画素がちょうど 1 つ → そこへ動いた（元の位置の画素は消し忘れてもよい）。値は画素の真ん中（i + 0.5）
    * - それ以外が 2 つ以上・不透明な画素が 1 つも無い・レイヤーが無い → 書かずに知らせる
    * jointLayers: { <関節>: image|null }。動いた関節があるときだけ joints-drawn.json を書く（キーの並びは元のまま）
    * 返す: { write: { file, kind: 'joints', text, diff, joints: [{ name, from, to }] } | null, notes }
@@ -972,7 +976,7 @@ var PartsCore = (function () {
           else others.push([x, y]);
         }
       if (others.length === 1) {
-        var to = { x: others[0][0], y: others[0][1] };
+        var to = { x: others[0][0] + 0.5, y: others[0][1] + 0.5 };
         var next = {};
         Object.keys(j).forEach(function (k) {
           next[k] = j[k];

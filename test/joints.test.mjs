@@ -35,18 +35,18 @@ const setPx = (img, x, y, rgba) => img.data.set(rgba, (y * GRID + x) * 4);
 const planOf = (opened) =>
   core.planSave(opened.info, opened.current, editedFromAse(readAse(writeAse({ width: GRID, height: GRID, layers: opened.layers })), opened.info));
 
-test('関節: joints-drawn.json があると、部位の上に関節ごとのレイヤーができる。点は四捨五入した画素に 1 つ、色はその関節を root に持つ部位の色', async () => {
+test('関節: joints-drawn.json があると、部位の上に関節ごとのレイヤーができる。点は関節の入っている画素（切り捨て）に 1 つ、色はその関節を root に持つ部位の色', async () => {
   const { dir } = fixture();
   const opened = await openFolder(dir);
   const names = opened.layers.map((l) => l.name);
   assert.deepEqual(names.slice(-2), ['joint:Head', 'joint:LeftArm']);
   assert.ok(names.indexOf('joint:Head') > names.indexOf('head'));
-  assert.deepEqual(opaque(layer(opened, 'joint:Head')), [[16, 12]]);
-  assert.deepEqual(opaque(layer(opened, 'joint:LeftArm')), [[10, 14]]);
+  assert.deepEqual(opaque(layer(opened, 'joint:Head')), [[16, 11]]);
+  assert.deepEqual(opaque(layer(opened, 'joint:LeftArm')), [[10, 13]]);
   const arm = layer(opened, 'joint:LeftArm');
-  assert.deepEqual([...arm.data.subarray((14 * GRID + 10) * 4, (14 * GRID + 10) * 4 + 4)], [...MAP_COLORS['arm-l'], 255]);
+  assert.deepEqual([...arm.data.subarray((13 * GRID + 10) * 4, (13 * GRID + 10) * 4 + 4)], [...MAP_COLORS['arm-l'], 255]);
   // 上下左右は薄い印（書き戻しでは読まない）
-  assert.equal(arm.data[(14 * GRID + 11) * 4 + 3], core.DRAWN_RING_ALPHA);
+  assert.equal(arm.data[(13 * GRID + 11) * 4 + 3], core.DRAWN_RING_ALPHA);
   for (const l of opened.layers.filter((l) => l.kind === 'joint')) assert.deepEqual([l.visible, l.editable], [true, true]);
 });
 
@@ -60,7 +60,7 @@ test('関節: 動かさなければ何も書かない（小数の値はそのま
   assert.equal(r.status, 0, r.stdout + r.stderr);
 });
 
-test('関節: 点を動かすと、その関節だけを画素の位置（整数）にして joints-drawn.json を書く。ほかの関節・キーの並び・部位の PNG は変えない', async () => {
+test('関節: 点を動かすと、その関節だけを画素の真ん中（i + 0.5）にして joints-drawn.json を書く。ほかの関節・キーの並び・部位の PNG は変えない', async () => {
   const { dir } = fixture();
   const before = snapshot(dir);
   const opened = await openFolder(dir);
@@ -71,13 +71,13 @@ test('関節: 点を動かすと、その関節だけを画素の位置（整数
   assert.deepEqual(plan.notes, []);
   assert.deepEqual(
     plan.writes.map((w) => [w.file, w.kind, w.joints]),
-    [['joints-drawn.json', 'joints', [{ name: 'LeftArm', from: { x: 10.45, y: 13.5 }, to: { x: 9, y: 15 } }]]]
+    [['joints-drawn.json', 'joints', [{ name: 'LeftArm', from: { x: 10.45, y: 13.5 }, to: { x: 9.5, y: 15.5 } }]]]
   );
   await core.writePlan(nodeIo, dir, plan);
   const after = snapshot(dir);
   assert.deepEqual(changedFiles(before, after), ['joints-drawn.json']);
   const text = after.get('joints-drawn.json').toString('utf8');
-  assert.equal(text, JSON.stringify({ Head: DRAWN.Head, LeftArm: { x: 9, y: 15, note: 'keep' } }, null, 2) + '\n');
+  assert.equal(text, JSON.stringify({ Head: DRAWN.Head, LeftArm: { x: 9.5, y: 15.5, note: 'keep' } }, null, 2) + '\n');
 });
 
 test('関節: 元の点を消し忘れて新しい点を打っても、新しい点へ動いたと読む。迷う形（点が 2 つ以上・点が無い・レイヤーが無い）は書かずに知らせる', async () => {
@@ -85,7 +85,7 @@ test('関節: 元の点を消し忘れて新しい点を打っても、新しい
   const opened = await openFolder(dir);
   setPx(layer(opened, 'joint:Head'), 20, 3, [9, 9, 9, 255]);
   let plan = planOf(opened);
-  assert.deepEqual(plan.writes.find((w) => w.kind === 'joints').joints.map((m) => [m.name, m.to]), [['Head', { x: 20, y: 3 }]]);
+  assert.deepEqual(plan.writes.find((w) => w.kind === 'joints').joints.map((m) => [m.name, m.to]), [['Head', { x: 20.5, y: 3.5 }]]);
 
   setPx(layer(opened, 'joint:Head'), 21, 3, [9, 9, 9, 255]);
   layer(opened, 'joint:LeftArm').data.fill(0);
@@ -110,7 +110,7 @@ test('関節: CLI の save で .ase から書き戻す（--dry-run は書かな�
   const before = snapshot(dir);
   let r = spawnSync(process.execPath, [CLI, 'save', asePath, '--dry-run'], { encoding: 'utf8' });
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.match(r.stdout, /書く予定: joints-drawn.json（関節 1: Head 16.1,11.9 → 17,10）/);
+  assert.match(r.stdout, /書く予定: joints-drawn.json（関節 1: Head 16.1,11.9 → 17.5,10.5）/);
   assert.deepEqual(changedFiles(before, snapshot(dir)), []);
   r = spawnSync(process.execPath, [CLI, 'save', asePath], { encoding: 'utf8' });
   assert.equal(r.status, 0, r.stdout + r.stderr);
@@ -118,4 +118,14 @@ test('関節: CLI の save で .ase から書き戻す（--dry-run は書かな�
 
   const plain = await openFolder(makeFixtureDir('np', { one: true }).dir);
   assert.ok(!plain.layers.some((l) => l.kind === 'joint'));
+});
+
+test('関節: 左右対称の値（中心 x = 16 から ±2.36）は、画素でも左右対称に置く（四捨五入だと片側だけ 1 画素ずれる）', async () => {
+  const fx = makeFixtureDir('sym', { one: true });
+  writeFileSync(join(fx.dir, 'joints-drawn.json'), JSON.stringify({ Head: { x: 18.36, y: 20.5 }, LeftArm: { x: 13.64, y: 20.5 } }, null, 2) + '\n');
+  const opened = await openFolder(fx.dir);
+  const [[a]] = opaque(layer(opened, 'joint:Head'));
+  const [[b]] = opaque(layer(opened, 'joint:LeftArm'));
+  // 画素 i の鏡は 31 - i（32 画素の絵の真ん中は 16.0）
+  assert.equal(a + b, GRID - 1);
 });

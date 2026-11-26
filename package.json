@@ -1,6 +1,6 @@
 {
   "name": "libresprite-parts-editor",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "heosterra の部位のフォルダ（〇〇-parts）を、部位ごとに 1 枚のレイヤーにして LibreSprite で直し、部位ごとの PNG へ書き戻す",
   "license": "MIT",
   "private": true,
