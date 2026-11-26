@@ -20,7 +20,10 @@ var PartsCore = (function () {
     hiddenSuffix: '.hidden', // 前の形（v0.1）の隠れた所のレイヤー: <部位>.hidden。読むときに部位のレイヤーへ寄せる
     guidePrefix: 'guide:', // ガイドのレイヤー: guide:<部位>
     map: 'map', // map.png のレイヤー
+    jointPrefix: 'joint:', // 絵の上の関節（joints-drawn.json）のレイヤー: joint:<関節>
   };
+  var DRAWN_FILE = 'joints-drawn.json'; // 絵の上の関節の位置（heosterra の animate が使う）
+  var DRAWN_RING_ALPHA = 110; // 関節の点の上下左右の、見つけやすくするための薄い印の不透明度（書き戻しでは読まない）
   var GUIDE_ALPHA = 170; // ガイドの線の不透明度（下の絵が透けて見えるように）
   var JOINT_ALPHA = 255; // 関節の点の不透明度
 
@@ -697,11 +700,50 @@ var PartsCore = (function () {
     return out;
   }
 
+  /** 関節の点の位置（joints-drawn.json の値を画素へ。heosterra と同じく四捨五入） */
+  function drawnPixel(j) {
+    return [Math.round(j.x), Math.round(j.y)];
+  }
+
+  /**
+   * 絵の上の関節 1 つのレイヤーの絵: 関節の位置に不透明な 1 画素、その上下左右に薄い印（DRAWN_RING_ALPHA）。
+   * 書き戻しは不透明な画素だけを関節として読む
+   */
+  function jointImage(w, h, j, color) {
+    var out = blank(w, h);
+    var p = drawnPixel(j);
+    var put = function (x, y, a) {
+      if (x < 0 || y < 0 || x >= w || y >= h) return;
+      var o = (y * w + x) * 4;
+      out.data[o] = color[0];
+      out.data[o + 1] = color[1];
+      out.data[o + 2] = color[2];
+      out.data[o + 3] = a;
+    };
+    put(p[0] - 1, p[1], DRAWN_RING_ALPHA);
+    put(p[0] + 1, p[1], DRAWN_RING_ALPHA);
+    put(p[0], p[1] - 1, DRAWN_RING_ALPHA);
+    put(p[0], p[1] + 1, DRAWN_RING_ALPHA);
+    put(p[0], p[1], JOINT_ALPHA);
+    return out;
+  }
+
+  /** joints-drawn.json の中身を確かめる（{ <関節>: { x, y } }） */
+  function readDrawnJson(text) {
+    var json = JSON.parse(text);
+    if (!json || typeof json !== 'object' || Array.isArray(json)) throw new Error(DRAWN_FILE + ' is not an object');
+    Object.keys(json).forEach(function (k) {
+      var j = json[k];
+      if (!j || typeof j.x !== 'number' || typeof j.y !== 'number') throw new Error(DRAWN_FILE + ' has a joint without x/y: ' + k);
+    });
+    return json;
+  }
+
   /**
    * 読み込んだ部位から、レイヤーの並び（下 = 奥から上 = 手前）を作る。
-   * 並び: map → guide:<部位>（order の順）→ <部位>（order の順、奥 → 手前）。
-   * ガイドと map は部位の画素の下に置き、部位の絵に被らないようにする。
-   * 返す各要素: { name, image, visible, editable, kind: 'part'|'map'|'guide', part }
+   * 並び: map → guide:<部位>（order の順）→ <部位>（order の順、奥 → 手前）→ joint:<関節>（joints-drawn.json があるとき。その並びの順）。
+   * ガイドと map は部位の画素の下に置き、部位の絵に被らないようにする。関節は動かすので、部位の絵の上に置く。
+   * 返す各要素: { name, image, visible, editable, kind: 'part'|'map'|'guide'|'joint', part }
    */
   function buildLayers(info, files) {
     var order = info.order;
@@ -739,6 +781,23 @@ var PartsCore = (function () {
       var image = one ? (files.own[name] ? copyImage(files.own[name]) : blank(w, h)) : composePart(own[name], hidden[name], w, h);
       layers.push({ name: name, kind: 'part', part: name, image: image, visible: true, editable: true });
     });
+    if (info.drawn) {
+      // 関節の色は、その関節を root に持つ部位の色（無ければ白）
+      var rootColor = {};
+      (info.json.parts || []).forEach(function (p) {
+        if (p.root && colors[p.name] && !rootColor[p.root]) rootColor[p.root] = colors[p.name];
+      });
+      Object.keys(info.drawn).forEach(function (jn) {
+        layers.push({
+          name: LAYER.jointPrefix + jn,
+          kind: 'joint',
+          part: null,
+          image: jointImage(w, h, info.drawn[jn], rootColor[jn] || [255, 255, 255]),
+          visible: true,
+          editable: true,
+        });
+      });
+    }
     return { layers: layers, colors: colors };
   }
 
@@ -873,6 +932,66 @@ var PartsCore = (function () {
    * 画素の変わらないファイルは書かない（PNG の作り直しで中身の同じファイルのバイト列を変えないため）。
    */
   function planSave(info, current, edited, options) {
+    var plan = planSaveParts(info, current, edited, options);
+    var j = planJoints(info, edited.joints);
+    if (j.write) plan.writes.push(j.write);
+    plan.notes = plan.notes.concat(j.notes);
+    return plan;
+  }
+
+  /**
+   * 関節の書き戻し: joint:<関節> のレイヤーの不透明な画素を、その関節の位置として読む。
+   * - 不透明な画素が、読み込んだときの位置（四捨五入した画素）だけ → 動いていない。値はそのまま（小数も残す）
+   * - それ以外の不透明な画素がちょうど 1 つ → そこへ動いた（元の位置の画素は消し忘れてもよい）。値は画素の位置（整数）
+   * - それ以外が 2 つ以上・不透明な画素が 1 つも無い・レイヤーが無い → 書かずに知らせる
+   * jointLayers: { <関節>: image|null }。動いた関節があるときだけ joints-drawn.json を書く（キーの並びは元のまま）
+   * 返す: { write: { file, kind: 'joints', text, diff, joints: [{ name, from, to }] } | null, notes }
+   */
+  function planJoints(info, jointLayers) {
+    var notes = [];
+    if (!info.drawn || !jointLayers) return { write: null, notes: notes };
+    var w = info.width;
+    var h = info.height;
+    var out = {};
+    var moved = [];
+    Object.keys(info.drawn).forEach(function (jn) {
+      var j = info.drawn[jn];
+      out[jn] = j;
+      var img = jointLayers[jn];
+      if (!img) {
+        notes.push('joint layer not found, left as is: ' + jn);
+        return;
+      }
+      var at = drawnPixel(j);
+      var others = [];
+      var atOriginal = false;
+      for (var y = 0; y < h; y++)
+        for (var x = 0; x < w; x++) {
+          if (img.data[(y * w + x) * 4 + 3] !== 255) continue;
+          if (x === at[0] && y === at[1]) atOriginal = true;
+          else others.push([x, y]);
+        }
+      if (others.length === 1) {
+        var to = { x: others[0][0], y: others[0][1] };
+        var next = {};
+        Object.keys(j).forEach(function (k) {
+          next[k] = j[k];
+        });
+        next.x = to.x;
+        next.y = to.y;
+        out[jn] = next;
+        moved.push({ name: jn, from: { x: j.x, y: j.y }, to: to });
+      } else if (others.length > 1) notes.push('joint ' + jn + ' has ' + (others.length + (atOriginal ? 1 : 0)) + ' opaque px, left as is (keep one)');
+      else if (!atOriginal) notes.push('joint ' + jn + ' has no opaque px, left as is');
+    });
+    if (!moved.length) return { write: null, notes: notes };
+    return {
+      write: { file: DRAWN_FILE, kind: 'joints', text: JSON.stringify(out, null, 2) + '\n', diff: moved.length, joints: moved },
+      notes: notes,
+    };
+  }
+
+  function planSaveParts(info, current, edited, options) {
     options = options || {};
     if (info.format === 'one') return planSaveOne(info, current, edited);
     var order = info.order;
@@ -982,6 +1101,17 @@ var PartsCore = (function () {
 
   /** 書くファイル 1 件の説明（例: "torso.png (12 px, 3 px moved to hidden)"） */
   function describeWrite(w) {
+    if (w.kind === 'joints')
+      return (
+        w.file +
+        ' (' +
+        w.joints
+          .map(function (m) {
+            return m.name + ' ' + m.from.x + ',' + m.from.y + ' -> ' + m.to.x + ',' + m.to.y;
+          })
+          .join('; ') +
+        ')'
+      );
     var s = w.file + ' (' + w.diff + ' px';
     if (w.visibleDiff) s += ', ' + w.visibleDiff + ' px in visible cells';
     if (w.toHidden) s += ', ' + w.toHidden + ' px moved to hidden';
@@ -1013,6 +1143,16 @@ var PartsCore = (function () {
     if (legacy.length)
       notes.push('old layout: merged ' + legacy.length + ' "<part>.hidden" layers into their part layers (reopen the folder to get the new layout)');
     return { parts: parts, found: found, legacy: legacy, notes: notes };
+  }
+
+  /** 関節のレイヤーを集める（pick は collectParts と同じ）。joints-drawn.json の無いフォルダでは null */
+  function collectJoints(info, pick) {
+    if (!info.drawn) return null;
+    var out = {};
+    Object.keys(info.drawn).forEach(function (jn) {
+      out[jn] = pick(LAYER.jointPrefix + jn) || null;
+    });
+    return out;
   }
 
   /** フォルダのファイルの一覧から json の名前を決める（parts.json があればそれ、無ければ .json が 1 つだけのとき） */
@@ -1084,6 +1224,12 @@ var PartsCore = (function () {
           readPng('map.png', function (img) {
             current.map = img;
           });
+          if (names.indexOf(DRAWN_FILE) >= 0)
+            jobs.push(
+              io.readText(joinPath(dir, DRAWN_FILE)).then(function (text) {
+                info.drawn = readDrawnJson(text);
+              })
+            );
           return Promise.all(jobs);
         });
       })
@@ -1127,6 +1273,8 @@ var PartsCore = (function () {
 
   return {
     LAYER: LAYER,
+    DRAWN_FILE: DRAWN_FILE,
+    DRAWN_RING_ALPHA: DRAWN_RING_ALPHA,
     PART_COLORS: PART_COLORS,
     GUIDE_ALPHA: GUIDE_ALPHA,
     crc32: crc32,
@@ -1150,6 +1298,9 @@ var PartsCore = (function () {
     mapLabels: mapLabels,
     folderFormat: folderFormat,
     collectParts: collectParts,
+    collectJoints: collectJoints,
+    jointImage: jointImage,
+    planJoints: planJoints,
     describeWrite: describeWrite,
     rebuildMap: rebuildMap,
     planSave: planSave,
@@ -1295,7 +1446,11 @@ var PartsApp = (function (core) {
       return l ? layerPixels(l, info.width, info.height) : null;
     });
     if (!c.found) throw new Error('the sprite has no layer named after a part');
-    return { parts: c.parts, notes: c.notes };
+    var joints = core.collectJoints(info, function (name) {
+      var l = byName[name];
+      return l ? layerPixels(l, info.width, info.height) : null;
+    });
+    return { parts: c.parts, joints: joints, notes: c.notes };
   }
 
   /** 書き戻す（fs の口が要る） */
@@ -1319,7 +1474,7 @@ var PartsApp = (function (core) {
     });
   }
 
-  /** 種類ごとにレイヤーの表示を切り替える（kind: 'guide' | 'map'） */
+  /** 種類ごとにレイヤーの表示を切り替える（kind: 'guide' | 'map' | 'joint'） */
   function toggle(kind) {
     var spr = app.activeSprite;
     if (!spr) return null;
@@ -1330,6 +1485,7 @@ var PartsApp = (function (core) {
       var name = l.name;
       if (kind === 'guide' && name.indexOf(core.LAYER.guidePrefix) === 0) targets.push(l);
       else if (kind === 'map' && name === core.LAYER.map) targets.push(l);
+      else if (kind === 'joint' && name.indexOf(core.LAYER.jointPrefix) === 0) targets.push(l);
     }
     if (!targets.length) return null;
     var show = !targets.some(function (l) {
@@ -1412,6 +1568,7 @@ var PartsApp = (function (core) {
     }
     dialog.addButton('Guides', 'guide');
     dialog.addButton('Map', 'map');
+    dialog.addButton('Joints', 'joint');
     dialog.addBreak();
     dialog.addLabel('', 'status');
     if (hasFs()) {
@@ -1444,10 +1601,10 @@ var PartsApp = (function (core) {
       run('Saving', function () {
         return save(d, status);
       });
-    } else if (e === 'guide_click' || e === 'map_click') {
+    } else if (e === 'guide_click' || e === 'map_click' || e === 'joint_click') {
       var kind = e.replace(/_click$/, '');
       var shown = toggle(kind);
-      var label = { guide: 'Guide', map: 'Map' }[kind];
+      var label = { guide: 'Guide', map: 'Map', joint: 'Joint' }[kind];
       status(shown === null ? 'No ' + label.toLowerCase() + ' layers in the active sprite' : label + ' layers ' + (shown ? 'shown' : 'hidden'));
     } else if (/_close$/.test(e)) {
       // 窓の閉じるボタン（新しい版は parts_editor_close。1.3 は窓に id が無い）

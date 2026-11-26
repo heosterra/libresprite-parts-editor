@@ -85,7 +85,7 @@ function samePng(a, b) {
 
 /**
  * 直さずに書き戻したときの見込みを Node の core で計算する:
- * エディタの見た目（ガイドを除く合成）、書くファイル、分け直したあとの見えている所
+ * エディタの見た目（ガイドと関節を除く合成）、書くファイル、分け直したあとの見えている所
  */
 async function expectNoEdit(dir) {
   const opened = await openFolder(dir);
@@ -94,7 +94,7 @@ async function expectNoEdit(dir) {
   const flat = core.blank(w, h);
   for (const l of opened.layers) {
     if (l.kind === 'part') parts[l.name] = l.image;
-    if (!l.visible || l.kind === 'guide') continue;
+    if (!l.visible || l.kind === 'guide' || l.kind === 'joint') continue;
     for (let i = 0; i < w * h; i++) if (l.image.data[i * 4 + 3]) flat.data.set(l.image.data.subarray(i * 4, i * 4 + 4), i * 4);
   }
   const plan = core.planSave(opened.info, opened.current, { parts });
@@ -119,10 +119,13 @@ function checkFlat(flat, want, label) {
   else console.log(`     ${label}: 立ち絵と違う画素 ${d}（隠れた所の下書きが立ち絵の外へはみ出しているため）`);
 }
 
-function expectedLayers(order) {
+/** 期待するレイヤーの並び。joints-drawn.json があれば、その関節のレイヤーが一番上に並ぶ */
+function expectedLayers(order, dir) {
   const list = [['map', false, false]];
   for (const n of order) list.push([`guide:${n}`, true, false]);
   for (const n of order) list.push([n, true, true]);
+  const drawn = join(dir, core.DRAWN_FILE);
+  if (existsSync(drawn)) for (const j of Object.keys(JSON.parse(readFileSync(drawn, 'utf8')))) list.push([`joint:${j}`, true, true]);
   return list;
 }
 
@@ -168,7 +171,7 @@ async function modeAse() {
   // 直さずに書き戻す（CLI が作った .ase のまま）。はみ出しの無い方向では何も書かない。
   // はみ出しのある方向では見込みのファイルだけを書く（以降の確かめは、書き戻したあとのフォルダを元にする）
   const s0 = spawnSync(process.execPath, [cli, 'save', asePath], { encoding: 'utf8' });
-  if (!want.files.length) check(s0.status === 0 && /変わった部位はありません/.test(s0.stdout), 'CLI save（直していない .ase）: 何も書かない', s0.stdout.trim());
+  if (!want.files.length) check(s0.status === 0 && /変わった部位・関節はありません/.test(s0.stdout), 'CLI save（直していない .ase）: 何も書かない', s0.stdout.trim());
   else {
     const wrote = [...s0.stdout.matchAll(/^書きます: (\S+?)（/gm)].map((m) => m[1]).sort();
     check(s0.status === 0 && JSON.stringify(wrote) === JSON.stringify(want.files), `CLI save（直していない .ase）: はみ出しの分け直しで ${want.files.length} ファイルを書く`, describePlan(want.plan));
@@ -191,7 +194,7 @@ async function modeAse() {
   const r = runLibreSprite(scriptPath);
   check(r.opened === true, `LibreSprite（${r.version}）で .ase を開ける`);
   const order = core.readPartsJson(readFileSync(join(dir, 'parts.json'), 'utf8')).order;
-  check(JSON.stringify(r.layers) === JSON.stringify(expectedLayers(order)), 'レイヤーの名前・並び（奥 → 手前）・表示・編集の可否', `${r.layers?.length} レイヤー`);
+  check(JSON.stringify(r.layers) === JSON.stringify(expectedLayers(order, dir)), 'レイヤーの名前・並び（奥 → 手前）・表示・編集の可否', `${r.layers?.length} レイヤー`);
   if (existsSync(flatPath)) checkFlat(refDecode(readFileSync(flatPath)), want, 'ase');
   else check(false, 'ガイドを隠した合成を PNG に書き出せる');
 
@@ -235,7 +238,7 @@ async function modeInapp() {
   check(r.done === true && !r.error, `LibreSprite（${r.version}）で parts-editor.js の読み込み・書き戻しが通る`);
   if (!r.layers) return;
   const order = core.readPartsJson(readFileSync(join(srcDir, 'parts.json'), 'utf8')).order;
-  check(JSON.stringify(r.layers) === JSON.stringify(expectedLayers(order)), 'レイヤーの名前・並び（奥 → 手前）・表示・編集の可否', `${r.layers.length} レイヤー`);
+  check(JSON.stringify(r.layers) === JSON.stringify(expectedLayers(order, srcDir)), 'レイヤーの名前・並び（奥 → 手前）・表示・編集の可否', `${r.layers.length} レイヤー`);
   check(JSON.stringify(r.size) === JSON.stringify([editBefore.width, editBefore.height, 0]), '絵の大きさと色の形（RGB）', JSON.stringify(r.size));
   checkFlat(core.decodePng(Buffer.from(r.flatPng, 'base64')), want, 'inapp');
   const noEdit = Array.isArray(r.writesNoEdit) ? r.writesNoEdit.map((p) => p.slice(memDir.length + 1)).sort() : null;

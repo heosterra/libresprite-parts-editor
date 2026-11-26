@@ -34,7 +34,7 @@
     var flat = new Uint8Array(W * H * 4);
     for (i = 0; i < sprite.layerCount; i++) {
       var ly = sprite.layer(i);
-      if (!ly.isVisible || ly.name.indexOf('guide:') === 0) continue;
+      if (!ly.isVisible || ly.name.indexOf('guide:') === 0 || ly.name.indexOf('joint:') === 0) continue;
       var px = PartsApp.layerPixels(ly, W, H);
       for (var k = 0; k < W * H; k++)
         if (px.data[k * 4 + 3]) {
