@@ -6,6 +6,7 @@
 //     （既定の置き場: フォルダの隣の <フォルダ名>.ase）
 //   node cli/parts-ase.mjs save  <file.ase> [--dir <部位のフォルダ>] [--dry-run] [--no-map]
 //     LibreSprite で直して保存した .ase から、部位ごとの PNG へ書き戻す（画素の変わったファイルだけ）
+//     joints-drawn.json があれば、関節ごとのレイヤー（joint:<関節>）も作り、動かした関節を joints-drawn.json へ書き戻す
 //   node cli/parts-ase.mjs check <部位のフォルダ>
 //     読み込み → .ase → 書き戻しの往復で、どのファイルも変わらないことを確かめる（何も書かない）
 //
@@ -56,11 +57,17 @@ export function editedFromAse(ase, info) {
     return l ? (l.image ?? core.blank(info.width, info.height)) : null;
   });
   if (!c.found) throw new Error('.ase に部位のレイヤーがありません');
-  return { parts: c.parts, notes: c.notes };
+  const joints = core.collectJoints(info, (name) => {
+    const l = byName.get(name);
+    return l ? (l.image ?? core.blank(info.width, info.height)) : null;
+  });
+  return { parts: c.parts, joints, notes: c.notes };
 }
 
 /** 書くファイル 1 件を日本語で（例: "torso.png（12 画素。見えている所 → 隠れた所 3）"） */
 export function describeWrite(w) {
+  if (w.kind === 'joints')
+    return `${w.file}（関節 ${w.joints.length}: ${w.joints.map((m) => `${m.name} ${m.from.x},${m.from.y} → ${m.to.x},${m.to.y}`).join('、')}）`;
   const extra = [];
   if (w.visibleDiff) extra.push(`うち見えている所（map.png）${w.visibleDiff}`);
   if (w.toHidden) extra.push(`見えている所 → 隠れた所 ${w.toHidden}`);
@@ -116,6 +123,7 @@ async function main(argv) {
     const out = values.out ?? defaultAsePath(target);
     writeFileSync(out, aseBytes(opened));
     console.log(`${out} を作りました（${opened.layers.length} レイヤー。奥 → 手前: ${opened.info.order.join(' → ')}）`);
+    if (opened.info.drawn) console.log(`関節のレイヤー（joint:<関節>。${core.DRAWN_FILE} から）: ${Object.keys(opened.info.drawn).length}`);
     console.log(FORMAT_LABEL[opened.info.format]);
     if (opened.info.missing.length) console.log(`PNG の無い部位（空のレイヤー）: ${opened.info.missing.join(', ')}`);
     return 0;
@@ -126,7 +134,7 @@ async function main(argv) {
     console.log(FORMAT_LABEL[info.format]);
     for (const n of plan.notes) console.log(`注意: ${n}`);
     if (!plan.writes.length) {
-      console.log('変わった部位はありません（何も書いていません）');
+      console.log('変わった部位・関節はありません（何も書いていません）');
       return 0;
     }
     for (const w of plan.writes) console.log(`${values['dry-run'] ? '書く予定' : '書きます'}: ${describeWrite(w)}`);

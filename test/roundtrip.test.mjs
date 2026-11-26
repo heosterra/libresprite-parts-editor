@@ -295,7 +295,7 @@ test('CLI open: 既定の置き場はフォルダの隣の <フォルダ名>.ase
   assert.deepEqual(changedFiles(before, snapshot(dir)), []);
   const s = spawnSync(process.execPath, [CLI, 'save', asePath], { encoding: 'utf8' });
   assert.equal(s.status, 0, s.stdout + s.stderr);
-  assert.match(s.stdout, /変わった部位はありません/);
+  assert.match(s.stdout, /変わった部位・関節はありません/);
   assert.deepEqual(changedFiles(before, snapshot(dir)), []);
 });
 
